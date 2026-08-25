@@ -13,7 +13,6 @@ const ICE_SERVERS: RTCConfiguration = {
   ]
 };
 
-// 403 HATASI VERMEYEN GÜVENİLİR SOLANA RPC
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
 
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
@@ -47,7 +46,7 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
 export default function ChatPage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [tabFilter, setTabFilter] = useState<"all" | "direct" | "groups">("all");
+  const [tabFilter, setTabFilter] = useState<"all" | "direct" | "groups" | "locked">("all");
   const [activeChat, setActiveChat] = useState<{ id: string; name: string; isGroup: boolean } | null>(null);
 
   const [users, setUsers] = useState<any[]>([]);
@@ -58,6 +57,12 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [pinnedChats, setPinnedChats] = useState<string[]>([]);
+  const [lockedChats, setLockedChats] = useState<string[]>([]);
+  const [isLockedTabUnlocked, setIsLockedTabUnlocked] = useState(false);
+  const [pinPromptModalOpen, setPinPromptModalOpen] = useState(false);
+  const [enteredPin, setEnteredPin] = useState("");
+  const [pendingLockedChat, setPendingLockedChat] = useState<any | null>(null);
+
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   const [dogMenuOpen, setDogMenuOpen] = useState(false);
@@ -79,7 +84,7 @@ export default function ChatPage() {
   const [disableReadReceipts, setDisableReadReceipts] = useState(false);
   const [screenshotProtection, setScreenshotProtection] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [appPin, setAppPin] = useState("");
+  const [appPin, setAppPin] = useState("1234");
   const [lang, setLang] = useState("tr");
 
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
@@ -150,13 +155,15 @@ export default function ChatPage() {
     try {
       const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
       const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
-      const exists = existing.some(
+      const idx = existing.findIndex(
         (m) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
       );
-      if (!exists) {
+      if (idx >= 0) {
+        existing[idx] = { ...existing[idx], ...msg };
+      } else {
         existing.push(msg);
-        localStorage.setItem(key, JSON.stringify(existing));
       }
+      localStorage.setItem(key, JSON.stringify(existing));
     } catch {}
   }
 
@@ -170,14 +177,61 @@ export default function ChatPage() {
   }
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
+    if (!chat) {
+      setActiveChat(null);
+      if (currentUser) localStorage.removeItem(`rishyou_last_active_${currentUser}`);
+      return;
+    }
+
+    const chatId = chat.isGroup ? `grp_${chat.id}` : chat.name;
+    const isLocked = lockedChats.includes(chatId);
+
+    if (isLocked && !isLockedTabUnlocked) {
+      setPendingLockedChat(chat);
+      setPinPromptModalOpen(true);
+      return;
+    }
+
     setActiveChat(chat);
-    if (chat && currentUser) {
+    if (currentUser) {
       localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(chat));
       if (!chat.isGroup) {
         addChatPartner(chat.name);
       }
-    } else if (currentUser) {
-      localStorage.removeItem(`rishyou_last_active_${currentUser}`);
+    }
+
+    // Karşı tarafa okundu bilgisi gönder
+    if (signalChannelRef.current && currentUser && !disableReadReceipts) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "read_receipt",
+        payload: { reader: currentUser, partner: chat.name, isGroup: chat.isGroup, groupId: chat.id }
+      });
+    }
+  }
+
+  function toggleLockChat(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setLockedChats((prev) => {
+      const updated = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      if (currentUser) localStorage.setItem(`rishyou_locked_${currentUser}`, JSON.stringify(updated));
+      return updated;
+    });
+  }
+
+  function handlePinSubmit() {
+    if (enteredPin === appPin) {
+      setIsLockedTabUnlocked(true);
+      setPinPromptModalOpen(false);
+      setEnteredPin("");
+      if (pendingLockedChat) {
+        setActiveChat(pendingLockedChat);
+        if (currentUser) localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(pendingLockedChat));
+        setPendingLockedChat(null);
+      }
+    } else {
+      alert("Hatalı PIN! Lütfen tekrar deneyin.");
+      setEnteredPin("");
     }
   }
 
@@ -211,9 +265,19 @@ export default function ChatPage() {
         try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
       }
 
+      const savedLocked = localStorage.getItem(`rishyou_locked_${user}`);
+      if (savedLocked) {
+        try { setLockedChats(JSON.parse(savedLocked)); } catch {}
+      }
+
       const lastActive = localStorage.getItem(`rishyou_last_active_${user}`);
       if (lastActive) {
-        try { setActiveChat(JSON.parse(lastActive)); } catch {}
+        try {
+          const parsed = JSON.parse(lastActive);
+          const chatId = parsed.isGroup ? `grp_${parsed.id}` : parsed.name;
+          const isLocked = savedLocked ? JSON.parse(savedLocked).includes(chatId) : false;
+          if (!isLocked) setActiveChat(parsed);
+        } catch {}
       }
 
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
@@ -381,7 +445,6 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // 400 HATASI ALMAYAN GÜVENLİ VE HIZLI MESAJ YÜKLEME
   async function loadDirectMessages(u1: string, u2: string) { 
     const localMsgs = getMessagesFromStorage(u1, u2, false);
     setMessages(localMsgs);
@@ -442,7 +505,6 @@ export default function ChatPage() {
     }
   }
 
-  // 403 HATASI VERMEYEN GÜVENLİ SOLANA BAKİYE SORGULAYICI
   async function loadWalletData(username: string) {
     try {
       const { data } = await supabase.from("users").select("wallet_address").eq("username", username).single();
@@ -509,6 +571,7 @@ export default function ChatPage() {
       }
     });
 
+    // MESAJ ALIMI & TIK SENKRONİZASYONU
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -521,13 +584,43 @@ export default function ChatPage() {
         }
       } else {
         if (payload.receiver === username) {
-          saveMessageToStorage(username, payload.sender, false, payload);
+          const isCurrentlyOpen = cur && !cur.isGroup && cur.name === payload.sender;
+          const msgWithStatus = { ...payload, is_read: isCurrentlyOpen, status: isCurrentlyOpen ? "read" : "delivered" };
+
+          saveMessageToStorage(username, payload.sender, false, msgWithStatus);
           addChatPartner(payload.sender);
-          if (cur && !cur.isGroup && cur.name === payload.sender) {
-            setMessages((prev) => [...prev, payload]);
+
+          if (isCurrentlyOpen) {
+            setMessages((prev) => [...prev, msgWithStatus]);
+            // Gönderene anında Mavi Tık sinyali gönder
+            if (signalChannelRef.current && !disableReadReceipts) {
+              signalChannelRef.current.send({
+                type: "broadcast",
+                event: "read_receipt",
+                payload: { reader: username, partner: payload.sender }
+              });
+            }
           }
         }
       }
+    });
+
+    // MAVİ TIK (READ RECEIPT) YAKALAYICI
+    channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
+      if (!payload || payload.partner !== username) return;
+      const reader = payload.reader;
+
+      setMessages((prev) =>
+        prev.map((m) => (m.sender === username ? { ...m, is_read: true, status: "read" } : m))
+      );
+
+      // Depodaki mesajları mavi tık yap
+      try {
+        const key = getChatStorageKey(username, reader, false);
+        const stored = JSON.parse(localStorage.getItem(key) || "[]");
+        const updated = stored.map((m: any) => (m.sender === username ? { ...m, is_read: true, status: "read" } : m));
+        localStorage.setItem(key, JSON.stringify(updated));
+      } catch {}
     });
 
     channel.subscribe(async (status) => {
@@ -560,6 +653,8 @@ export default function ChatPage() {
     if (!content) return;
     if (!isAudio) { setText(""); setShowEmojiPicker(false); }
 
+    const isPartnerOnline = !activeChat.isGroup && presenceMap[activeChat.name]?.online;
+
     const newMsg = {
       sender: currentUser,
       receiver: activeChat.isGroup ? null : activeChat.name,
@@ -567,7 +662,9 @@ export default function ChatPage() {
       content: content,
       message_type: isAudio ? "audio" : "text",
       created_at: new Date().toISOString(),
-      isGroup: activeChat.isGroup
+      isGroup: activeChat.isGroup,
+      status: isPartnerOnline ? "delivered" : "sent",
+      is_read: false
     };
 
     setMessages((prev) => [...prev, newMsg]);
@@ -873,11 +970,22 @@ export default function ChatPage() {
     setNewVaultNote("");
   }
 
+  // FİLTRELEME & GİZLİ SOHBET KONTROLÜ
   const visibleUsers = searchQuery.trim()
     ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
-    : users.filter((u) => activeChatPartners.includes(u.username));
+    : users.filter((u) => {
+        const isPartner = activeChatPartners.includes(u.username);
+        const isLocked = lockedChats.includes(u.username);
+        if (tabFilter === "locked") return isLocked;
+        return isPartner && !isLocked;
+      });
 
-  const filteredGroups = groups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredGroups = groups.filter((g) => {
+    const matchesSearch = g.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const isLocked = lockedChats.includes(`grp_${g.id}`);
+    if (tabFilter === "locked") return matchesSearch && isLocked;
+    return matchesSearch && !isLocked;
+  });
 
   const sortedUsers = [...visibleUsers].sort((a, b) => {
     const aPin = pinnedChats.includes(a.username);
@@ -917,7 +1025,7 @@ export default function ChatPage() {
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
 
-      {/* SOL KENAR ÇUBUĞU (INBOX / SOHBET LİSTESİ) */}
+      {/* SOL KENAR ÇUBUĞU */}
       <aside className={`flex flex-col w-full md:w-80 lg:w-96 bg-[#17212b] border-r border-[#242f3d] flex-shrink-0 relative ${activeChat ? "hidden md:flex" : "flex"}`}>
         
         <div className="flex items-center justify-between p-3 border-b border-[#242f3d] bg-[#17212b] z-20 gap-1.5">
@@ -996,10 +1104,24 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="flex px-3 pt-2.5 gap-1.5">
+        {/* SEKME FİLTRELERİ (GİZLİ SOHBETLER / PIN KORUMALI) */}
+        <div className="flex px-3 pt-2.5 gap-1">
           <button onClick={() => setTabFilter("all")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "all" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Tümü</button>
-          <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gelen Kutusu</button>
-          <button onClick={() => setTabFilter("groups")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "groups" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gruplarım</button>
+          <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gelen</button>
+          <button onClick={() => setTabFilter("groups")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "groups" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gruplar</button>
+          <button 
+            onClick={() => {
+              if (!isLockedTabUnlocked) {
+                setPinPromptModalOpen(true);
+              } else {
+                setTabFilter("locked");
+              }
+            }} 
+            className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1 ${tabFilter === "locked" ? "bg-amber-500 text-black shadow" : "bg-[#242f3d] text-amber-400 hover:text-amber-300"}`}
+            title="PIN Korumalı Gizli Sohbetler"
+          >
+            <span>🔒</span><span>Gizli</span>
+          </button>
         </div>
 
         <div className="p-3">
@@ -1011,9 +1133,10 @@ export default function ChatPage() {
 
         {/* LİSTELER */}
         <div className="flex-1 overflow-y-auto px-2 space-y-1 pb-4">
-          {(tabFilter === "all" || tabFilter === "groups") && sortedGroups.map((g) => {
+          {(tabFilter === "all" || tabFilter === "groups" || tabFilter === "locked") && sortedGroups.map((g) => {
             const isSelected = activeChat?.isGroup && activeChat.id === g.id;
             const isPinned = pinnedChats.includes(g.id);
+            const isLocked = lockedChats.includes(`grp_${g.id}`);
             const hasTimer = (chatTimers[`grp_${g.id}`] || 0) > 0;
 
             return (
@@ -1024,6 +1147,7 @@ export default function ChatPage() {
                     <span className="text-xs font-bold text-white truncate">{g.name}</span>
                     <div className="flex items-center gap-1.5">
                       {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
+                      <button onClick={(e) => toggleLockChat(`grp_${g.id}`, e)} className={`text-[11px] ${isLocked ? "text-amber-400 opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`} title={isLocked ? "Gizli Sohbetten Çıkar" : "Gizli Sohbete Al (Kitle)"}>🔒</button>
                       <button onClick={(e) => togglePin(g.id, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
                       <span className="text-[9px] bg-[#9945FF]/30 text-[#AB9FF2] px-1.5 py-0.5 rounded font-bold">Özel Grup</span>
                     </div>
@@ -1036,9 +1160,10 @@ export default function ChatPage() {
             );
           })}
 
-          {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.map((u) => {
+          {(tabFilter === "all" || tabFilter === "direct" || tabFilter === "locked") && sortedUsers.map((u) => {
             const isSelected = !activeChat?.isGroup && activeChat?.name === u.username;
             const isPinned = pinnedChats.includes(u.username);
+            const isLocked = lockedChats.includes(u.username);
             const statusInfo = getUserOnlineStatus(u.username);
             const hasTimer = (chatTimers[u.username] || 0) > 0;
 
@@ -1057,6 +1182,7 @@ export default function ChatPage() {
                     <span className="text-xs font-bold text-white truncate">@{u.username}</span>
                     <div className="flex items-center gap-1.5">
                       {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
+                      <button onClick={(e) => toggleLockChat(u.username, e)} className={`text-[11px] ${isLocked ? "text-amber-400 opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`} title={isLocked ? "Gizli Sohbetten Çıkar" : "Gizli Sohbete Al (Kitle)"}>🔒</button>
                       <button onClick={(e) => togglePin(u.username, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
                       <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
                         {statusInfo.text}
@@ -1071,9 +1197,9 @@ export default function ChatPage() {
             );
           })}
 
-          {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.length === 0 && (
+          {(tabFilter === "all" || tabFilter === "direct" || tabFilter === "locked") && sortedUsers.length === 0 && (
             <div className="text-center py-8 px-4 text-gray-500 text-xs">
-              {searchQuery.trim() ? "Kullanıcı bulunamadı." : "Gelen kutunuz boş. Üstteki arama çubuğundan kullanıcı adı arayarak sohbet başlatın."}
+              {tabFilter === "locked" ? "Gizli sohbetiniz bulunmuyor. Herhangi bir sohbeti 🔒 ikonuna basarak buraya kilitleyebilirsiniz." : searchQuery.trim() ? "Kullanıcı bulunamadı." : "Gelen kutunuz boş. Üstteki arama çubuğundan kullanıcı adı arayarak sohbet başlatın."}
             </div>
           )}
         </div>
@@ -1130,7 +1256,7 @@ export default function ChatPage() {
               </div>
             </div>
 
-            {/* MESAJLAR LİSTESİ */}
+            {/* MESAJLAR VE TIK SİSTEMİ */}
             <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative flex flex-col">
               <div className="flex justify-center my-0.5">
                 <div className="py-1 px-3 bg-[#1e293b]/90 border border-[#14F195]/30 rounded-full text-[10px] shadow-sm flex items-center gap-2 backdrop-blur-md">
@@ -1143,6 +1269,8 @@ export default function ChatPage() {
               {displayMessages.map((m, idx) => {
                 const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";
+                const isRead = m.is_read || m.status === "read";
+
                 return (
                   <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto"}`}>
@@ -1156,8 +1284,19 @@ export default function ChatPage() {
                       ) : (
                         <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>
                       )}
-                      <div className="text-[8.5px] sm:text-[9px] text-gray-300/70 text-right mt-0.5">
-                        {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      <div className="flex items-center justify-end gap-1 text-[8.5px] sm:text-[9px] text-gray-300/70 mt-0.5">
+                        <span>{new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                        {isMe && !activeChat.isGroup && (
+                          <span className="font-bold">
+                            {isRead && !disableReadReceipts ? (
+                              <span className="text-[#14F195]" title="Okundu (Mavi Tık)">✓✓</span>
+                            ) : m.status === "delivered" ? (
+                              <span className="text-gray-300" title="İletildi">✓✓</span>
+                            ) : (
+                              <span className="text-gray-400" title="Gönderildi">✓</span>
+                            )}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1203,6 +1342,30 @@ export default function ChatPage() {
           </div>
         )}
       </main>
+
+      {/* PIN GİRİŞ MODALI (GİZLİ SOHBET KİLİT AÇMA) */}
+      {pinPromptModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/85 backdrop-blur-md">
+          <div className="w-full max-w-xs bg-[#17212b] border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3 text-center">
+            <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center text-2xl">🔒</div>
+            <h3 className="text-sm font-black text-white">Gizli Sohbet PIN Kilidi</h3>
+            <p className="text-xs text-gray-400">Gizli sohbetlerinizi görüntülemek için 4 haneli PIN şifrenizi girin:</p>
+            <input 
+              type="password" 
+              maxLength={4} 
+              value={enteredPin} 
+              onChange={(e) => setEnteredPin(e.target.value)} 
+              placeholder="••••" 
+              className="w-full bg-[#242f3d] border border-gray-700 text-center text-xl tracking-widest text-white p-2.5 rounded-xl focus:outline-none focus:border-amber-400"
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <button onClick={() => { setPinPromptModalOpen(false); setEnteredPin(""); setPendingLockedChat(null); }} className="flex-1 py-2 bg-[#242f3d] text-gray-300 font-bold text-xs rounded-xl cursor-pointer hover:text-white">İptal</button>
+              <button onClick={handlePinSubmit} className="flex-1 py-2 bg-amber-500 text-black font-black text-xs rounded-xl cursor-pointer hover:bg-amber-400">Kilidi Aç</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SOHBETE ÖZEL SÜRELİ MESAJLAR MODALI */}
       {chatTimerModalOpen && activeChat && (
@@ -1297,7 +1460,7 @@ export default function ChatPage() {
             )}
             {settingsTab === "pin" && (
               <div className="space-y-2 text-xs">
-                <p className="text-gray-400">Uygulama açılışı için hesabınıza özel 4 haneli PIN belirleyin:</p>
+                <p className="text-gray-400">Uygulama açılışı ve gizli sohbetler için 4 haneli PIN belirleyin:</p>
                 <input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); saveUserSettings({ appPin: e.target.value }); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
               </div>
             )}
