@@ -69,12 +69,17 @@ export default function ChatPage() {
   const [storyModalOpen, setStoryModalOpen] = useState(false);
   const [activeStoryView, setActiveStoryView] = useState<any | null>(null);
 
+  // KULLANICIYA ÖZEL GİZLİLİK VE AYARLAR
   const [hideOnline, setHideOnline] = useState(false);
   const [disableReadReceipts, setDisableReadReceipts] = useState(false);
   const [screenshotProtection, setScreenshotProtection] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [autoDelete24h, setAutoDelete24h] = useState(false);
   const [appPin, setAppPin] = useState("");
   const [lang, setLang] = useState("tr");
+
+  // ÇEVRİM İÇİ & SON GÖRÜLME DURUM HARİTASI
+  const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
 
   const [solPrice, setSolPrice] = useState<number>(96.40);
   const [solChange, setSolChange] = useState<string>("+1.40%");
@@ -109,6 +114,7 @@ export default function ChatPage() {
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   
   const activeChatRef = useRef<any>(null);
+  const groupsRef = useRef<any[]>([]);
   const currentCallPartnerRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -130,6 +136,10 @@ export default function ChatPage() {
   }, [activeChat]);
 
   useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
+
+  useEffect(() => {
     const user = sessionStorage.getItem("rishyou_username");
     if (!user) {
       router.push("/");
@@ -139,13 +149,33 @@ export default function ChatPage() {
       loadGroups(user);
       loadWalletData(user);
       loadChatPartners(user);
-      initRealtimeHub(user);
 
+      // KULLANICIYA ÖZEL KASA VE AYARLARI YÜKLE
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
 
       const savedPins = localStorage.getItem(`rishyou_pins_${user}`);
       if (savedPins) setPinnedChats(JSON.parse(savedPins));
+
+      let userHideOnline = false;
+      const savedSettings = localStorage.getItem(`rishyou_settings_${user}`);
+      if (savedSettings) {
+        try {
+          const parsed = JSON.parse(savedSettings);
+          if (parsed.hideOnline !== undefined) {
+            setHideOnline(parsed.hideOnline);
+            userHideOnline = parsed.hideOnline;
+          }
+          if (parsed.disableReadReceipts !== undefined) setDisableReadReceipts(parsed.disableReadReceipts);
+          if (parsed.screenshotProtection !== undefined) setScreenshotProtection(parsed.screenshotProtection);
+          if (parsed.soundEnabled !== undefined) setSoundEnabled(parsed.soundEnabled);
+          if (parsed.autoDelete24h !== undefined) setAutoDelete24h(parsed.autoDelete24h);
+          if (parsed.appPin !== undefined) setAppPin(parsed.appPin);
+          if (parsed.lang !== undefined) setLang(parsed.lang);
+        } catch {}
+      }
+
+      initRealtimeHub(user, userHideOnline);
     }
 
     const tpsInterval = setInterval(() => {
@@ -157,6 +187,29 @@ export default function ChatPage() {
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
   }, [router]);
+
+  function saveUserSettings(updated: any) {
+    if (!currentUser) return;
+    const settings = {
+      hideOnline,
+      disableReadReceipts,
+      screenshotProtection,
+      soundEnabled,
+      autoDelete24h,
+      appPin,
+      lang,
+      ...updated
+    };
+    localStorage.setItem(`rishyou_settings_${currentUser}`, JSON.stringify(settings));
+
+    if (updated.hideOnline !== undefined && signalChannelRef.current) {
+      signalChannelRef.current.track({
+        username: currentUser,
+        online_at: new Date().toISOString(),
+        hideOnline: updated.hideOnline
+      });
+    }
+  }
 
   useEffect(() => {
     if (localVideoRef.current && localStreamState && isVideoCall) {
@@ -215,12 +268,19 @@ export default function ChatPage() {
     });
   }
 
-  async function loadUsers(current: string) { const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); if (data) setUsers(data); }
+  async function loadUsers(current: string) { 
+    const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
+    if (data) setUsers(data); 
+  }
+
   async function loadChatPartners(current: string) {
     const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.eq.${current},receiver.eq.${current}`);
     if (data) {
       const partners = new Set<string>();
-      data.forEach((m) => { if (m.sender !== current) partners.add(m.sender); if (m.receiver !== current) partners.add(m.receiver); });
+      data.forEach((m) => { 
+        if (m.sender !== current) partners.add(m.sender); 
+        if (m.receiver !== current) partners.add(m.receiver); 
+      });
       setActiveChatPartners(Array.from(partners));
     }
   }
@@ -229,7 +289,10 @@ export default function ChatPage() {
     try {
       const { data } = await supabase.from("groups").select("*");
       if (data) {
-        const myGroups = data.filter((g: any) => g.created_by === username || (g.members && g.members.includes(username)));
+        const myGroups = data.filter((g: any) => {
+          const membersList = Array.isArray(g.members) ? g.members : [];
+          return g.created_by === username || membersList.includes(username);
+        });
         setGroups(myGroups);
       }
     } catch {}
@@ -252,18 +315,44 @@ export default function ChatPage() {
     const { data } = await supabase.from("messages").select("*").or(`and(sender.eq.${u1},receiver.eq.${u2}),and(sender.eq.${u2},receiver.eq.${u1})`).order("created_at", { ascending: true }); 
     if (data) setMessages(data); 
   }
+
   async function loadGroupMessages(groupId: string) { 
+    const isMember = groupsRef.current.some((g) => g.id === groupId);
+    if (!isMember) {
+      setMessages([]);
+      return;
+    }
     const { data } = await supabase.from("group_messages").select("*").eq("group_id", groupId).order("created_at", { ascending: true }); 
     if (data) setMessages(data); 
   }
 
-  // ANLIK REALTIME MERKEZİ (HEM ARAMA HEM MESAJLAR İÇİN 0MS WEBSOCKET)
-  function initRealtimeHub(username: string) {
+  // ANLIK VE İZOLE REALTIME + ÇEVRİM İÇİ / SON GÖRÜLME TAKİBİ
+  function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
-      config: { broadcast: { self: false } }
+      config: { 
+        broadcast: { self: false },
+        presence: { key: username }
+      }
     });
 
-    // 1. Arama Sinyalleri
+    // 1. Çevrim İçi ve Son Görülme Durumları
+    channel.on("presence", { event: "sync" }, () => {
+      const state = channel.presenceState();
+      const updatedMap: Record<string, { online: boolean; lastSeen?: string }> = {};
+
+      Object.keys(state).forEach((usr) => {
+        const presences = state[usr] as any[];
+        if (presences && presences.length > 0) {
+          const p = presences[0];
+          if (!p.hideOnline) {
+            updatedMap[p.username] = { online: true, lastSeen: p.online_at };
+          }
+        }
+      });
+      setPresenceMap(updatedMap);
+    });
+
+    // 2. Arama Sinyalleri
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
@@ -289,13 +378,14 @@ export default function ChatPage() {
       }
     });
 
-    // 2. Anlık Mesaj Alımı (Broadcast)
+    // 3. İzole Mesajlaşma
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
 
       if (payload.isGroup) {
-        if (cur?.isGroup && cur.id === payload.group_id) {
+        const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
+        if (isMember && cur?.isGroup && cur.id === payload.group_id) {
           setMessages((prev) => [...prev, payload]);
         }
       } else {
@@ -308,7 +398,16 @@ export default function ChatPage() {
       }
     });
 
-    channel.subscribe();
+    channel.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        await channel.track({
+          username,
+          online_at: new Date().toISOString(),
+          hideOnline: isHideOnline
+        });
+      }
+    });
+
     signalChannelRef.current = channel;
   }
 
@@ -322,7 +421,6 @@ export default function ChatPage() {
     }
   }
 
-  // ANLIK VE KESİNTİSİZ MESAJ GÖNDERME FONKSİYONU
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -340,10 +438,8 @@ export default function ChatPage() {
       isGroup: activeChat.isGroup
     };
 
-    // 1. Kendi ekranında salisesinde göster (Optimistic UI)
     setMessages((prev) => [...prev, newMsg]);
 
-    // 2. Karşı tarafın ekranına 0ms hızla WebSocket ile ilet
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -352,7 +448,6 @@ export default function ChatPage() {
       });
     }
 
-    // 3. Veritabanına kalıcı olarak kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -398,13 +493,24 @@ export default function ChatPage() {
     } catch { alert("Mikrofon izni verilmedi!"); }
   }
 
-  function stopRecordingAudio() { if (mediaRecorderRef.current && isRecordingAudio) { mediaRecorderRef.current.stop(); setIsRecordingAudio(false); } }
+  function stopRecordingAudio() { 
+    if (mediaRecorderRef.current && isRecordingAudio) { 
+      mediaRecorderRef.current.stop(); 
+      setIsRecordingAudio(false); 
+    } 
+  }
 
   async function createGroup() {
     if (!newGroupName.trim() || !currentUser) return;
     try {
       const allMembers = Array.from(new Set([currentUser, ...selectedMembers]));
-      const { data, error } = await supabase.from("groups").insert([{ name: newGroupName.trim(), created_by: currentUser, members: allMembers, created_at: new Date().toISOString() }]).select().single();
+      const { data, error } = await supabase.from("groups").insert([{
+        name: newGroupName.trim(),
+        created_by: currentUser,
+        members: allMembers,
+        created_at: new Date().toISOString()
+      }]).select().single();
+
       if (!error && data) {
         setGroups((prev) => [data, ...prev]);
         setActiveChat({ id: data.id, name: data.name, isGroup: true });
@@ -412,7 +518,15 @@ export default function ChatPage() {
         setNewGroupName("");
         setSelectedMembers([]);
       }
-    } catch (err: any) { alert("Grup hatası: " + err.message); }
+    } catch (err: any) { 
+      alert("Grup oluşturma hatası: " + err.message); 
+    }
+  }
+
+  function toggleMemberSelection(username: string) {
+    setSelectedMembers((prev) => 
+      prev.includes(username) ? prev.filter((u) => u !== username) : [...prev, username]
+    );
   }
 
   function createPeerConnection(targetUser: string) {
@@ -623,6 +737,22 @@ export default function ChatPage() {
     return aPin === bPin ? 0 : aPin ? -1 : 1;
   });
 
+  // 24 SAAT SONRA OTOMATİK MESAJ FİLTRELEME
+  const displayMessages = messages.filter((m) => {
+    if (!autoDelete24h) return true;
+    const msgTime = new Date(m.created_at).getTime();
+    const now = Date.now();
+    return (now - msgTime) < 24 * 60 * 60 * 1000;
+  });
+
+  function getUserOnlineStatus(username: string) {
+    const info = presenceMap[username];
+    if (info && info.online) {
+      return { text: "Çevrim İçi 🟢", isOnline: true };
+    }
+    return { text: "Çevrim Dışı", isOnline: false };
+  }
+
   return (
     <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
       
@@ -637,7 +767,7 @@ export default function ChatPage() {
           <button onClick={() => setDogMenuOpen(!dogMenuOpen)} className="flex items-center gap-2 p-1 rounded-2xl hover:bg-[#242f3d]/80 transition-all active:scale-95 text-left cursor-pointer min-w-0 flex-1">
             <div className="w-10 h-10 rounded-2xl bg-[#242f3d] border-2 border-[#14F195]/60 flex items-center justify-center shadow-lg relative flex-shrink-0">
               <RishyouDogIcon size={26} />
-              <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-[#14F195] border-2 border-[#17212b] rounded-full"></span>
+              <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 border-[#17212b] rounded-full ${hideOnline ? "bg-gray-500" : "bg-[#14F195]"}`}></span>
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1">
@@ -653,7 +783,7 @@ export default function ChatPage() {
             <div className="px-2 py-0.5 rounded-xl bg-[#242f3d] border border-[#14F195]/40 text-[9px] font-bold text-[#14F195] flex flex-col items-center leading-tight"><span>{tpsCount}</span><span className="text-[7px] text-gray-400 font-normal">TPS</span></div>
             <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı Mesajlar" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-yellow-400 text-xs transition-all active:scale-90 cursor-pointer">⭐</button>
             <button onClick={() => setSettingsModalOpen(true)} title="Ayarlar & Gizlilik" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-300 text-xs transition-all active:scale-90 cursor-pointer">⚙️</button>
-            <button onClick={() => setCreateGroupModal(true)} title="Yeni Grup Kur" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs font-bold transition-all active:scale-90 cursor-pointer">👥+</button>
+            <button onClick={() => setCreateGroupModal(true)} title="Yeni Özel Grup Kur" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs font-bold transition-all active:scale-90 cursor-pointer">👥+</button>
             <button onClick={() => setWalletModalOpen(true)} title="Solana Cüzdanı" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs font-bold transition-all active:scale-90 cursor-pointer">💳</button>
           </div>
 
@@ -703,8 +833,8 @@ export default function ChatPage() {
           <div onClick={() => setVaultModalOpen(true)} className="p-3 rounded-2xl bg-[#242f3d]/60 border border-[#14F195]/30 hover:border-[#14F195] cursor-pointer transition-all flex items-center gap-3 shadow-md group">
             <div className="w-9 h-9 rounded-xl bg-[#17212b] flex items-center justify-center text-base shadow border border-white/5">🔒</div>
             <div className="min-w-0 flex-1">
-              <h4 className="text-xs font-bold text-white group-hover:text-[#14F195] transition-colors">Kaydedilen Notlar (Kasa)</h4>
-              <p className="text-[10px] text-gray-400 truncate">Şifreler, Anahtarlar ve Özel Notlar</p>
+              <h4 className="text-xs font-bold text-white group-hover:text-[#14F195] transition-colors">Kişisel Kasa</h4>
+              <p className="text-[10px] text-gray-400 truncate">Size özel şifreler, anahtarlar ve notlar</p>
             </div>
           </div>
         </div>
@@ -712,16 +842,17 @@ export default function ChatPage() {
         <div className="flex px-3 pt-2.5 gap-1.5">
           <button onClick={() => setTabFilter("all")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "all" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Tümü</button>
           <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Kişiler</button>
-          <button onClick={() => setTabFilter("groups")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "groups" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gruplar</button>
+          <button onClick={() => setTabFilter("groups")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "groups" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gruplarım</button>
         </div>
 
         <div className="p-3">
           <div className="relative">
-            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Yeni kişi veya grup ara..." className="w-full bg-[#242f3d] border border-gray-700/60 text-xs text-white pl-8 pr-3 py-2 rounded-xl focus:outline-none focus:border-[#14F195] placeholder-gray-500" />
+            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Kişi veya dahil olduğun grubu ara..." className="w-full bg-[#242f3d] border border-gray-700/60 text-xs text-white pl-8 pr-3 py-2 rounded-xl focus:outline-none focus:border-[#14F195] placeholder-gray-500" />
             <span className="absolute left-2.5 top-2 text-xs text-gray-400">🔍</span>
           </div>
         </div>
 
+        {/* SADECE KULLANICIYA ÖZEL GRUPLAR VE SOHBETLER */}
         <div className="flex-1 overflow-y-auto px-2 space-y-1 pb-4">
           {(tabFilter === "all" || tabFilter === "groups") && sortedGroups.map((g) => {
             const isSelected = activeChat?.isGroup && activeChat.id === g.id;
@@ -734,10 +865,12 @@ export default function ChatPage() {
                     <span className="text-xs font-bold text-white truncate">{g.name}</span>
                     <div className="flex items-center gap-1.5">
                       <button onClick={(e) => togglePin(g.id, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
-                      <span className="text-[9px] bg-[#9945FF]/30 text-[#AB9FF2] px-1.5 py-0.5 rounded font-bold">Gruplar</span>
+                      <span className="text-[9px] bg-[#9945FF]/30 text-[#AB9FF2] px-1.5 py-0.5 rounded font-bold">Özel Grup</span>
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-400 truncate">Topluluk</p>
+                  <p className="text-[10px] text-gray-400 truncate">
+                    {g.created_by === currentUser ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}
+                  </p>
                 </div>
               </div>
             );
@@ -746,17 +879,26 @@ export default function ChatPage() {
           {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.map((u) => {
             const isSelected = !activeChat?.isGroup && activeChat?.name === u.username;
             const isPinned = pinnedChats.includes(u.username);
+            const statusInfo = getUserOnlineStatus(u.username);
+
             return (
               <div key={`usr_${u.username}`} onClick={() => setActiveChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
-                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] flex items-center justify-center font-black text-black text-xs shadow-md flex-shrink-0">
-                  {u.username.slice(0, 2).toUpperCase()}
+                <div className="relative flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] flex items-center justify-center font-black text-black text-xs shadow-md">
+                    {u.username.slice(0, 2).toUpperCase()}
+                  </div>
+                  {statusInfo.isOnline && (
+                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-[#14F195] border-2 border-[#17212b] rounded-full"></span>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white truncate">@{u.username}</span>
                     <div className="flex items-center gap-1.5">
                       <button onClick={(e) => togglePin(u.username, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
-                      <span className="text-[9px] text-gray-500">Çevrim Dışı</span>
+                      <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
+                        {statusInfo.text}
+                      </span>
                     </div>
                   </div>
                   <p className="text-[10px] text-gray-400 truncate">
@@ -782,7 +924,14 @@ export default function ChatPage() {
                 </div>
                 <div>
                   <h2 className="text-xs font-bold text-white">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
-                  <span className="text-[10px] text-[#14F195]">P2P Web3</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-[#14F195]">
+                      {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
+                    </span>
+                    {autoDelete24h && (
+                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.2 rounded font-medium">⏱️ 24s Silme Aktif</span>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -811,12 +960,15 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {messages.map((m, idx) => {
+              {displayMessages.map((m, idx) => {
                 const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";
                 return (
                   <div key={idx} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-3.5 py-2 text-xs shadow-md break-words ${isMe ? "bg-gradient-to-r from-[#2b5278] to-[#1e3b56] text-white rounded-br-xs" : "bg-[#182533] text-gray-200 rounded-bl-xs"}`}>
+                      {activeChat.isGroup && !isMe && (
+                        <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
+                      )}
                       {isAudio ? <audio controls src={m.content} className="max-w-[220px] h-8 my-1" /> : <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>}
                       <div className="text-[9px] text-gray-400 text-right mt-1 opacity-70">
                         {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -865,12 +1017,12 @@ export default function ChatPage() {
         )}
       </main>
 
-      {/* MODALLAR */}
+      {/* AYARLAR VE GİZLİLİK MODALI */}
       {settingsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-md bg-[#17212b] border border-gray-700 rounded-3xl p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-gray-700 pb-2.5">
-              <h3 className="text-xs font-black text-white flex items-center gap-1.5"><span>⚙️</span> Ayarlar & Gizlilik</h3>
+              <h3 className="text-xs font-black text-white flex items-center gap-1.5"><span>⚙️</span> Kişisel Ayarlar & Gizlilik</h3>
               <button onClick={() => setSettingsModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
             <div className="flex bg-[#242f3d] p-1 rounded-xl gap-1 overflow-x-auto">
@@ -882,28 +1034,56 @@ export default function ChatPage() {
             </div>
             {settingsTab === "privacy" && (
               <div className="space-y-2">
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span className="flex items-center gap-2">👤 Çevrim İçi Durumunu Gizle</span><input type="checkbox" checked={hideOnline} onChange={(e) => setHideOnline(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div>
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span className="flex items-center gap-2">✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span><input type="checkbox" checked={disableReadReceipts} onChange={(e) => setDisableReadReceipts(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div>
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span className="flex items-center gap-2">🛡️ Ekran Görüntüsü Koruması</span><input type="checkbox" checked={screenshotProtection} onChange={(e) => setScreenshotProtection(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
+                  <span className="flex items-center gap-2">👤 Çevrim İçi Durumunu Gizle</span>
+                  <input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); saveUserSettings({ hideOnline: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                </div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
+                  <span className="flex items-center gap-2">⏱️ 24 Saat Sonra Konuşmaları Otomatik Sil</span>
+                  <input type="checkbox" checked={autoDelete24h} onChange={(e) => { setAutoDelete24h(e.target.checked); saveUserSettings({ autoDelete24h: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                </div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
+                  <span className="flex items-center gap-2">✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span>
+                  <input type="checkbox" checked={disableReadReceipts} onChange={(e) => { setDisableReadReceipts(e.target.checked); saveUserSettings({ disableReadReceipts: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                </div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
+                  <span className="flex items-center gap-2">🛡️ Ekran Görüntüsü Koruması</span>
+                  <input type="checkbox" checked={screenshotProtection} onChange={(e) => { setScreenshotProtection(e.target.checked); saveUserSettings({ screenshotProtection: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                </div>
               </div>
             )}
             {settingsTab === "lang" && (
               <div className="space-y-1.5">
                 {[{ code: "tr", label: "🇹🇷 Türkçe" }, { code: "en", label: "🇬🇧 English" }, { code: "ru", label: "🇷🇺 Русский" }].map((l) => (
-                  <button key={l.code} onClick={() => { setLang(l.code); alert(`Dil ${l.label} olarak ayarlandı.`); }} className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer ${lang === l.code ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}>{l.label}</button>
+                  <button key={l.code} onClick={() => { setLang(l.code); saveUserSettings({ lang: l.code }); alert(`Dil ${l.label} olarak ayarlandı.`); }} className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer ${lang === l.code ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}>{l.label}</button>
                 ))}
               </div>
             )}
             {settingsTab === "sound" && (
-              <div className="space-y-2"><div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span>Mesaj Bildirim ve Arama Sesleri</span><input type="checkbox" checked={soundEnabled} onChange={(e) => setSoundEnabled(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div></div>
+              <div className="space-y-2">
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
+                  <span>Mesaj Bildirim ve Arama Sesleri</span>
+                  <input type="checkbox" checked={soundEnabled} onChange={(e) => { setSoundEnabled(e.target.checked); saveUserSettings({ soundEnabled: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                </div>
+              </div>
             )}
             {settingsTab === "theme" && (
-              <div className="space-y-2"><p className="text-xs text-gray-400">Vurgu Rengi Seçin:</p><div className="flex gap-2">{["#14F195", "#9945FF", "#3B82F6", "#EC4899", "#F59E0B"].map((c) => (<div key={c} style={{ backgroundColor: c }} className="w-8 h-8 rounded-full cursor-pointer border-2 border-white/30 hover:scale-110 transition-transform" />))}</div></div>
+              <div className="space-y-2">
+                <p className="text-xs text-gray-400">Vurgu Rengi Seçin:</p>
+                <div className="flex gap-2">
+                  {["#14F195", "#9945FF", "#3B82F6", "#EC4899", "#F59E0B"].map((c) => (
+                    <div key={c} style={{ backgroundColor: c }} className="w-8 h-8 rounded-full cursor-pointer border-2 border-white/30 hover:scale-110 transition-transform" />
+                  ))}
+                </div>
+              </div>
             )}
             {settingsTab === "pin" && (
-              <div className="space-y-2 text-xs"><p className="text-gray-400">Uygulama açılışı için 4 haneli PIN belirleyin:</p><input type="password" maxLength={4} value={appPin} onChange={(e) => setAppPin(e.target.value)} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" /></div>
+              <div className="space-y-2 text-xs">
+                <p className="text-gray-400">Uygulama açılışı için hesabınıza özel 4 haneli PIN belirleyin:</p>
+                <input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); saveUserSettings({ appPin: e.target.value }); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
+              </div>
             )}
-            <button onClick={() => setSettingsModalOpen(false)} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl shadow-lg cursor-pointer">Tamam</button>
+            <button onClick={() => setSettingsModalOpen(false)} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl shadow-lg cursor-pointer">Kaydet ve Kapat</button>
           </div>
         </div>
       )}
@@ -935,7 +1115,7 @@ export default function ChatPage() {
       {vaultModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-md bg-[#17212b] border border-[#14F195]/40 rounded-3xl p-5 shadow-2xl space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-700 pb-2"><h3 className="text-xs font-black text-white flex items-center gap-1.5"><span>🔒</span> Kaydedilen Notlar (Kasa)</h3><button onClick={() => setVaultModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button></div>
+            <div className="flex items-center justify-between border-b border-gray-700 pb-2"><h3 className="text-xs font-black text-white flex items-center gap-1.5"><span>🔒</span> Kişisel Kasa (@{currentUser})</h3><button onClick={() => setVaultModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button></div>
             <div className="space-y-2"><textarea value={newVaultNote} onChange={(e) => setNewVaultNote(e.target.value)} placeholder="Özel şifre, seed kelimeleri veya gizli notunuzu buraya yazın..." className="w-full h-20 bg-[#242f3d] border border-gray-700 text-xs text-white p-2.5 rounded-xl focus:outline-none focus:border-[#14F195]" /><button onClick={saveVaultNote} className="w-full py-2 bg-[#14F195] text-black font-bold text-xs rounded-xl shadow-md cursor-pointer active:scale-95">Kasaya Ekle</button></div>
             <div className="max-h-40 overflow-y-auto space-y-1.5 pt-2">
               {vaultNotes.map((n, idx) => (
@@ -977,12 +1157,29 @@ export default function ChatPage() {
         </div>
       )}
 
+      {/* ÖZEL GRUP KURMA MODALI */}
       {createGroupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-[#17212b] border border-gray-700 rounded-3xl p-5 shadow-2xl space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-700/60 pb-2.5"><h3 className="text-sm font-black text-white flex items-center gap-1.5"><span>👥</span> Yeni Grup Oluştur</h3><button onClick={() => setCreateGroupModal(false)} className="text-gray-400 hover:text-white text-sm cursor-pointer">✕</button></div>
+            <div className="flex items-center justify-between border-b border-gray-700/60 pb-2.5">
+              <h3 className="text-sm font-black text-white flex items-center gap-1.5"><span>👥</span> Yeni Özel Grup Kur</h3>
+              <button onClick={() => setCreateGroupModal(false)} className="text-gray-400 hover:text-white text-sm cursor-pointer">✕</button>
+            </div>
             <input type="text" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="Grup Adı" className="w-full bg-[#242f3d] border border-gray-700 text-xs text-white p-2.5 rounded-xl focus:outline-none focus:border-[#14F195]" />
-            <button onClick={createGroup} disabled={!newGroupName.trim()} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer">Grubu Oluştur</button>
+            
+            <div>
+              <p className="text-[11px] text-gray-400 mb-1 font-bold">Gruba Dahil Edilecek Kişileri Seçin:</p>
+              <div className="max-h-36 overflow-y-auto space-y-1 bg-[#242f3d]/50 p-2 rounded-xl border border-gray-700/60">
+                {users.map(u => (
+                  <div key={u.username} onClick={() => toggleMemberSelection(u.username)} className={`p-1.5 rounded-lg text-xs flex items-center justify-between cursor-pointer transition-colors ${selectedMembers.includes(u.username) ? "bg-[#14F195]/20 text-[#14F195] font-bold" : "hover:bg-[#242f3d] text-gray-300"}`}>
+                    <span>@{u.username}</span>
+                    <span>{selectedMembers.includes(u.username) ? "✔ Seçildi" : "+ Ekle"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={createGroup} disabled={!newGroupName.trim()} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer disabled:opacity-40">Grubu Oluştur</button>
           </div>
         </div>
       )}
