@@ -6,8 +6,8 @@ self.addEventListener("push", function (event) {
       body: data.body || "Rishyou Web3 Bildirimi",
       icon: "/favicon.ico",
       badge: "/favicon.ico",
-      vibrate: isCall ? [500, 250, 500, 250, 500, 250, 500] : [200, 100, 200],
-      tag: isCall ? "incoming-call" : "chat-message",
+      vibrate: isCall ? [600, 300, 600, 300, 600, 300] : [200, 100, 200],
+      tag: isCall ? "incoming-call-alert" : "chat-alert",
       renotify: true,
       requireInteraction: isCall,
       data: { url: data.url || "/chat", caller: data.caller }
