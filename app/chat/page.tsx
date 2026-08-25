@@ -10,14 +10,19 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun3.l.google.com:19302" },
-    { urls: "stun:stun4.l.google.com:19302" },
-    { urls: "stun:openrelay.metered.ca:80" },
-    { urls: "stun:openrelay.metered.ca:443" }
+    { urls: "stun:global.stun.twilio.com:3478" }
   ],
   iceCandidatePoolSize: 10
 };
 
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
+
+const AUDIO_PARAMS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  sampleRate: 48000
+};
 
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
   return (
@@ -114,7 +119,7 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
-  // ARAMA VE WEBRTC MOTORU STATE'LERİ
+  // ARAMA VE WEBRTC MOTORU
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
@@ -149,28 +154,16 @@ export default function ChatPage() {
   const audioChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    activeChatRef.current = activeChat;
-  }, [activeChat]);
+  useEffect(() => { activeChatRef.current = activeChat; }, [activeChat]);
+  useEffect(() => { groupsRef.current = groups; }, [groups]);
 
-  useEffect(() => {
-    groupsRef.current = groups;
-  }, [groups]);
-
-  // Bildirim İzni ve Service Worker Kaydı
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
-      if (Notification.permission === "granted") {
-        setNotificationsAllowed(true);
-      } else if (Notification.permission !== "denied") {
-        Notification.requestPermission().then((p) => {
-          setNotificationsAllowed(p === "granted");
-        });
+      if (Notification.permission === "granted") setNotificationsAllowed(true);
+      else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then((p) => setNotificationsAllowed(p === "granted"));
       }
-
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/sw.js").catch(() => {});
-      }
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
   }, []);
 
@@ -180,31 +173,21 @@ export default function ChatPage() {
         if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
           navigator.serviceWorker.controller.postMessage({ title, body, type: isCall ? "call" : "msg" });
         } else {
-          new Notification(title, {
-            body,
-            icon: "/favicon.ico",
-            badge: "/favicon.ico",
-            vibrate: isCall ? [500, 250, 500, 250, 500] : [200, 100, 200]
-          } as any);
+          new Notification(title, { body, icon: "/favicon.ico", vibrate: isCall ? [500, 250, 500] : [200, 100] } as any);
         }
       } catch {}
     }
   }
 
-  // Arama Süresi Sayacı
   useEffect(() => {
     if (isCallActive) {
       setCallDuration(0);
-      callTimerRef.current = setInterval(() => {
-        setCallDuration((prev) => prev + 1);
-      }, 1000);
+      callTimerRef.current = setInterval(() => setCallDuration((p) => p + 1), 1000);
     } else {
       if (callTimerRef.current) clearInterval(callTimerRef.current);
       setCallDuration(0);
     }
-    return () => {
-      if (callTimerRef.current) clearInterval(callTimerRef.current);
-    };
+    return () => { if (callTimerRef.current) clearInterval(callTimerRef.current); };
   }, [isCallActive]);
 
   function formatCallTime(seconds: number) {
@@ -214,23 +197,16 @@ export default function ChatPage() {
   }
 
   function getStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
-    if (isGroup) return `rishyou_history_grp_${partnerOrGroupId}`;
-    const pair = [user, partnerOrGroupId].sort().join("_");
-    return `rishyou_history_dm_${pair}`;
+    return isGroup ? `rishyou_history_grp_${partnerOrGroupId}` : `rishyou_history_dm_${[user, partnerOrGroupId].sort().join("_")}`;
   }
 
   function saveMessageLocal(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
     try {
       const key = getStorageKey(user, partnerOrGroupId, isGroup);
       const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
-      const idx = existing.findIndex(
-        (m) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
-      );
-      if (idx >= 0) {
-        existing[idx] = { ...existing[idx], ...msg };
-      } else {
-        existing.push(msg);
-      }
+      const idx = existing.findIndex((m) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content);
+      if (idx >= 0) existing[idx] = { ...existing[idx], ...msg };
+      else existing.push(msg);
       localStorage.setItem(key, JSON.stringify(existing));
     } catch {}
   }
@@ -239,9 +215,7 @@ export default function ChatPage() {
     try {
       const key = getStorageKey(user, partnerOrGroupId, isGroup);
       return JSON.parse(localStorage.getItem(key) || "[]");
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   }
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
@@ -263,9 +237,7 @@ export default function ChatPage() {
     setActiveChat(chat);
     if (currentUser) {
       localStorage.setItem(`rishyou_active_chat_${currentUser}`, JSON.stringify(chat));
-      if (!chat.isGroup) {
-        addChatPartner(chat.name);
-      }
+      if (!chat.isGroup) addChatPartner(chat.name);
     }
 
     if (signalChannelRef.current && currentUser && !disableReadReceipts) {
@@ -310,23 +282,11 @@ export default function ChatPage() {
 
   function saveUserSettings(updated: any) {
     if (!currentUser) return;
-    const newSettings = {
-      hideOnline,
-      disableReadReceipts,
-      screenshotProtection,
-      soundEnabled,
-      appPin,
-      lang,
-      ...updated
-    };
+    const newSettings = { hideOnline, disableReadReceipts, screenshotProtection, soundEnabled, appPin, lang, ...updated };
     syncUserDataToCloud(currentUser, { settings: newSettings });
 
     if (updated.hideOnline !== undefined && signalChannelRef.current) {
-      signalChannelRef.current.track({
-        username: currentUser,
-        online_at: new Date().toISOString(),
-        hideOnline: updated.hideOnline
-      });
+      signalChannelRef.current.track({ username: currentUser, online_at: new Date().toISOString(), hideOnline: updated.hideOnline });
     }
   }
 
@@ -340,7 +300,7 @@ export default function ChatPage() {
         setPendingLockedChat(null);
       }
     } else {
-      alert("Hatalı PIN! Lütfen tekrar deneyin.");
+      alert("Hatalı PIN!");
       setEnteredPin("");
     }
   }
@@ -356,11 +316,7 @@ export default function ChatPage() {
 
   async function syncUserDataToCloud(username: string, updates: any) {
     try {
-      await supabase.from("user_data").upsert({
-        username,
-        ...updates,
-        updated_at: new Date().toISOString()
-      });
+      await supabase.from("user_data").upsert({ username, ...updates, updated_at: new Date().toISOString() });
     } catch {}
   }
 
@@ -387,20 +343,11 @@ export default function ChatPage() {
 
   async function checkOfflineIncomingCalls(username: string) {
     try {
-      const { data } = await supabase
-        .from("call_logs")
-        .select("*")
-        .eq("receiver", username)
-        .eq("status", "calling")
-        .order("created_at", { ascending: false })
-        .limit(1);
-
+      const { data } = await supabase.from("call_logs").select("*").eq("receiver", username).eq("status", "calling").order("created_at", { ascending: false }).limit(1);
       if (data && data.length > 0) {
         const call = data[0];
         const callTime = new Date(call.created_at).getTime();
-        const now = Date.now();
-
-        if (now - callTime < 45000) {
+        if (Date.now() - callTime < 45000) {
           currentCallPartnerRef.current = call.caller;
           setCurrentCallLogId(call.id);
           setIsVideoCall(call.call_type === "video");
@@ -440,13 +387,8 @@ export default function ChatPage() {
       initRealtimeHub(user, hideOnline);
     }
 
-    const tpsInterval = setInterval(() => {
-      setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
-    }, 3000);
-
-    const pollInterval = setInterval(() => {
-      if (user) checkOfflineIncomingCalls(user);
-    }, 6000);
+    const tpsInterval = setInterval(() => setTpsCount((p) => p + Math.floor(Math.random() * 11) - 5), 3000);
+    const pollInterval = setInterval(() => { if (user) checkOfflineIncomingCalls(user); }, 6000);
 
     return () => {
       clearInterval(tpsInterval);
@@ -456,58 +398,37 @@ export default function ChatPage() {
   }, [router]);
 
   useEffect(() => {
-    if (localVideoRef.current && localStreamState && isVideoCall) {
-      localVideoRef.current.srcObject = localStreamState;
-    }
+    if (localVideoRef.current && localStreamState && isVideoCall) localVideoRef.current.srcObject = localStreamState;
   }, [localStreamState, callModalOpen, isVideoCall]);
 
   useEffect(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => { track.enabled = !isMuted; });
-    }
+    if (localStreamRef.current) localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = !isMuted; });
   }, [isMuted]);
 
   useEffect(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach((track) => { track.enabled = !cameraOff; });
-    }
+    if (localStreamRef.current) localStreamRef.current.getVideoTracks().forEach((t) => { t.enabled = !cameraOff; });
   }, [cameraOff]);
 
   useEffect(() => {
-    if (incomingCall && soundEnabled) {
-      ringtoneRef.current?.play().catch(() => {});
-    } else {
-      ringtoneRef.current?.pause();
-      if (ringtoneRef.current) ringtoneRef.current.currentTime = 0;
-    }
+    if (incomingCall && soundEnabled) ringtoneRef.current?.play().catch(() => {});
+    else { ringtoneRef.current?.pause(); if (ringtoneRef.current) ringtoneRef.current.currentTime = 0; }
   }, [incomingCall, soundEnabled]);
 
   useEffect(() => {
-    if (callStatus.includes("aranıyor") && soundEnabled) {
-      dialtoneRef.current?.play().catch(() => {});
-    } else {
-      dialtoneRef.current?.pause();
-      if (dialtoneRef.current) dialtoneRef.current.currentTime = 0;
-    }
+    if (callStatus.includes("aranıyor") && soundEnabled) dialtoneRef.current?.play().catch(() => {});
+    else { dialtoneRef.current?.pause(); if (dialtoneRef.current) dialtoneRef.current.currentTime = 0; }
   }, [callStatus, soundEnabled]);
 
   useEffect(() => {
     if (!currentUser || !activeChat) return;
-
-    if (activeChat.isGroup) {
-      loadGroupMessages(activeChat.id);
-    } else {
-      loadDirectMessages(currentUser, activeChat.name);
-    }
+    if (activeChat.isGroup) loadGroupMessages(activeChat.id);
+    else loadDirectMessages(currentUser, activeChat.name);
   }, [currentUser, activeChat]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   async function loadUsers(current: string) { 
-    try {
-      const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
-      if (data) setUsers(data); 
-    } catch {}
+    try { const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); if (data) setUsers(data); } catch {}
   }
 
   async function loadChatPartners(current: string) {
@@ -530,10 +451,7 @@ export default function ChatPage() {
     try {
       const { data } = await supabase.from("groups").select("*");
       if (data) {
-        const myGroups = data.filter((g: any) => {
-          const membersList = Array.isArray(g.members) ? g.members : [];
-          return g.created_by === username || membersList.includes(username);
-        });
+        const myGroups = data.filter((g: any) => g.created_by === username || (Array.isArray(g.members) && g.members.includes(username)));
         setGroups(myGroups);
       }
     } catch {}
@@ -542,60 +460,35 @@ export default function ChatPage() {
   async function loadDirectMessages(u1: string, u2: string) { 
     const localMsgs = getMessagesLocal(u1, u2, false);
     setMessages(localMsgs);
-
     try {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .order("created_at", { ascending: true }); 
-
+      const { data, error } = await supabase.from("messages").select("*").order("created_at", { ascending: true }); 
       if (!error && data) {
-        const filtered = data.filter(
-          (m: any) => (m.sender === u1 && m.receiver === u2) || (m.sender === u2 && m.receiver === u1)
-        );
-        
+        const filtered = data.filter((m: any) => (m.sender === u1 && m.receiver === u2) || (m.sender === u2 && m.receiver === u1));
         const mergedMap = new Map();
         [...localMsgs, ...filtered].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
-          mergedMap.set(key, m);
+          mergedMap.set(`${m.sender}_${m.created_at}_${m.content}`, m);
           saveMessageLocal(u1, u2, false, m);
         });
         setMessages(Array.from(mergedMap.values()));
       }
-    } catch (e) {
-      console.error("Mesaj yükleme hatası:", e);
-    }
+    } catch {}
   }
 
   async function loadGroupMessages(groupId: string) { 
-    const isMember = groupsRef.current.some((g) => g.id === groupId);
-    if (!isMember) {
-      setMessages([]);
-      return;
-    }
-
+    if (!groupsRef.current.some((g) => g.id === groupId)) return setMessages([]);
     const localMsgs = getMessagesLocal(currentUser || "", groupId, true);
     setMessages(localMsgs);
-
     try {
-      const { data, error } = await supabase
-        .from("group_messages")
-        .select("*")
-        .eq("group_id", groupId)
-        .order("created_at", { ascending: true }); 
-      
+      const { data, error } = await supabase.from("group_messages").select("*").eq("group_id", groupId).order("created_at", { ascending: true }); 
       if (!error && data) {
         const mergedMap = new Map();
         [...localMsgs, ...data].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
-          mergedMap.set(key, m);
+          mergedMap.set(`${m.sender}_${m.created_at}_${m.content}`, m);
           if (currentUser) saveMessageLocal(currentUser, groupId, true, m);
         });
         setMessages(Array.from(mergedMap.values()));
       }
-    } catch (e) {
-      console.error("Grup mesaj hatası:", e);
-    }
+    } catch {}
   }
 
   async function loadWalletData(username: string) {
@@ -605,44 +498,31 @@ export default function ChatPage() {
         setWalletAddress(data.wallet_address);
         try {
           const conn = new Connection(SOLANA_RPC, "confirmed");
-          const pub = new PublicKey(data.wallet_address);
-          const bal = await conn.getBalance(pub);
+          const bal = await conn.getBalance(new PublicKey(data.wallet_address));
           setSolBalance(bal / LAMPORTS_PER_SOL);
-        } catch {
-          setSolBalance(0);
-        }
+        } catch { setSolBalance(0); }
       }
     } catch {}
   }
 
   // ==========================================
-  // SAĞLAM WEBRTC VE SİNYALLEŞME MOTORU
+  // WEBRTC ÇELİK GİBİ ÇEKİRDEK MOTORU
   // ==========================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
-    const channel = supabase.channel(`rishyou_realtime_hub`, {
-      config: { 
-        broadcast: { self: false },
-        presence: { key: username }
-      }
-    });
+    const channel = supabase.channel(`rishyou_realtime_hub`, { config: { broadcast: { self: false }, presence: { key: username } } });
 
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState();
       const updatedMap: Record<string, { online: boolean; lastSeen?: string }> = {};
-
       Object.keys(state).forEach((usr) => {
         const presences = state[usr] as any[];
-        if (presences && presences.length > 0) {
-          const p = presences[0];
-          if (!p.hideOnline) {
-            updatedMap[p.username] = { online: true, lastSeen: p.online_at };
-          }
+        if (presences && presences.length > 0 && !presences[0].hideOnline) {
+          updatedMap[presences[0].username] = { online: true, lastSeen: presences[0].online_at };
         }
       });
       setPresenceMap(updatedMap);
     });
 
-    // SİNYAL DİNLEYİCİSİ
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
@@ -660,9 +540,7 @@ export default function ChatPage() {
             const candidate = iceCandidatesQueue.current.shift();
             try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
           }
-        } catch (e) {
-          console.error("Answer hatası:", e);
-        }
+        } catch {}
       } else if (payload.type === "candidate") {
         const candidate = JSON.parse(payload.payload);
         if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
@@ -675,57 +553,37 @@ export default function ChatPage() {
       }
     });
 
-    // MESAJ DİNLEYİCİSİ
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
 
       if (payload.isGroup) {
         saveMessageLocal(username, payload.group_id, true, payload);
-        const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
-        if (isMember && cur?.isGroup && cur.id === payload.group_id) {
-          setMessages((prev) => [...prev, payload]);
-        } else if (isMember) {
-          triggerPushNotification("👥 Yeni Grup Mesajı", `@${payload.sender}: ${payload.message_type === 'audio' ? '🎙️ Sesli Mesaj' : payload.content}`);
+        if (groupsRef.current.some((g) => g.id === payload.group_id)) {
+          if (cur?.isGroup && cur.id === payload.group_id) setMessages((prev) => [...prev, payload]);
+          else triggerPushNotification("👥 Yeni Grup Mesajı", `@${payload.sender}: ${payload.content}`);
         }
-      } else {
-        if (payload.receiver === username) {
-          saveMessageLocal(username, payload.sender, false, payload);
-          addChatPartner(payload.sender);
-          const isCurrentlyOpen = cur && !cur.isGroup && cur.name === payload.sender;
-          const msgWithStatus = { ...payload, is_read: isCurrentlyOpen, status: isCurrentlyOpen ? "read" : "delivered" };
-
-          if (isCurrentlyOpen) {
-            setMessages((prev) => [...prev, msgWithStatus]);
-            if (signalChannelRef.current && !disableReadReceipts) {
-              signalChannelRef.current.send({
-                type: "broadcast",
-                event: "read_receipt",
-                payload: { reader: username, partner: payload.sender }
-              });
-            }
-          } else {
-            triggerPushNotification(`💬 @${payload.sender}`, payload.message_type === 'audio' ? '🎙️ Sesli Mesaj' : payload.content);
+      } else if (payload.receiver === username) {
+        saveMessageLocal(username, payload.sender, false, payload);
+        addChatPartner(payload.sender);
+        if (cur && !cur.isGroup && cur.name === payload.sender) {
+          setMessages((prev) => [...prev, { ...payload, is_read: true, status: "read" }]);
+          if (signalChannelRef.current && !disableReadReceipts) {
+            signalChannelRef.current.send({ type: "broadcast", event: "read_receipt", payload: { reader: username, partner: payload.sender } });
           }
+        } else {
+          triggerPushNotification(`💬 @${payload.sender}`, payload.content);
         }
       }
     });
 
     channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
       if (!payload || payload.partner !== username) return;
-      setMessages((prev) =>
-        prev.map((m) => (m.sender === username ? { ...m, is_read: true, status: "read" } : m))
-      );
+      setMessages((prev) => prev.map((m) => (m.sender === username ? { ...m, is_read: true, status: "read" } : m)));
     });
 
     channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await channel.track({
-          username,
-          online_at: new Date().toISOString(),
-          hideOnline: isHideOnline
-        });
-      }
+      if (status === "SUBSCRIBED") await channel.track({ username, online_at: new Date().toISOString(), hideOnline: isHideOnline });
     });
 
     signalChannelRef.current = channel;
@@ -733,31 +591,22 @@ export default function ChatPage() {
 
   function sendSignal(receiver: string, type: string, payload: string) {
     if (signalChannelRef.current) {
-      signalChannelRef.current.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { sender: currentUser, receiver, type, payload }
-      });
+      signalChannelRef.current.send({ type: "broadcast", event: "signal", payload: { sender: currentUser, receiver, type, payload } });
     }
   }
 
   function createPeerConnection(targetUser: string) {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-    }
+    if (peerConnectionRef.current) peerConnectionRef.current.close();
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = pc;
     iceCandidatesQueue.current = [];
 
     pc.onicecandidate = (event) => {
-      if (event.candidate && targetUser) {
-        sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
-      }
+      if (event.candidate && targetUser) sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
     };
 
     pc.ontrack = (event) => {
       const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-      
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
         remoteAudioRef.current.muted = false;
@@ -771,15 +620,12 @@ export default function ChatPage() {
       setIsCallActive(true);
     };
 
-    // KOPMAYI ENGELLEYEN BAĞLANTI DURUM TAKİBİ (OTOMATİK ATMA KALDIRILDI)
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
         setCallStatus("Ses Hattı Bağlandı 🟢");
         setIsCallActive(true);
       } else if (pc.connectionState === "disconnected") {
         setCallStatus("Bağlantı Yenileniyor 🟡");
-      } else if (pc.connectionState === "failed") {
-        setCallStatus("Bağlantı Hatası 🔴");
       }
     };
 
@@ -800,29 +646,19 @@ export default function ChatPage() {
     setCameraOff(false);
 
     try {
-      const { data } = await supabase.from("call_logs").insert([{
-        caller: currentUser,
-        receiver: target,
-        call_type: video ? "video" : "audio",
-        status: "calling",
-        created_at: new Date().toISOString()
-      }]).select().single();
+      const { data } = await supabase.from("call_logs").insert([{ caller: currentUser, receiver: target, call_type: video ? "video" : "audio", status: "calling", created_at: new Date().toISOString() }]).select().single();
       if (data) setCurrentCallLogId(data.id);
     } catch {}
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
-      });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: false });
         setIsVideoCall(false);
       } catch {
-        setCallStatus("Mikrofon izni verilmedi!");
-        return;
+        return setCallStatus("Mikrofon izni verilmedi!");
       }
     }
 
@@ -830,7 +666,7 @@ export default function ChatPage() {
     setLocalStreamState(stream);
     
     const pc = createPeerConnection(target);
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
     try {
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: video });
@@ -853,26 +689,20 @@ export default function ChatPage() {
     setIsSpeakerOff(false);
     setCameraOff(false);
 
-    if (currentCallLogId) {
-      supabase.from("call_logs").update({ status: "answered" }).eq("id", currentCallLogId).then(() => {});
-    }
+    if (currentCallLogId) supabase.from("call_logs").update({ status: "answered" }).eq("id", currentCallLogId).then(() => {});
 
     const isVideo = incomingCall.payload?.includes("m=video") || isVideoCall || false;
     setIsVideoCall(isVideo);
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
-      });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: false });
         setIsVideoCall(false);
       } catch {
-        setCallStatus("Mikrofon hatası!");
-        return;
+        return setCallStatus("Mikrofon hatası!");
       }
     }
 
@@ -880,17 +710,15 @@ export default function ChatPage() {
     setLocalStreamState(stream);
 
     const pc = createPeerConnection(caller);
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
     try {
       if (incomingCall.payload) {
         await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
         sendSignal(caller, "answer", JSON.stringify(answer));
       }
-      
       setIncomingCall(null);
       setCallStatus("Ses Hattı Bağlandı 🟢");
       setIsCallActive(true);
@@ -906,10 +734,7 @@ export default function ChatPage() {
 
   function cleanupCall() {
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => {
-        t.stop();
-        t.enabled = false;
-      });
+      localStreamRef.current.getTracks().forEach((t) => { t.stop(); t.enabled = false; });
       localStreamRef.current = null;
     }
     if (peerConnectionRef.current) {
@@ -940,14 +765,12 @@ export default function ChatPage() {
 
   function endCall(sendEndSignal = true) {
     const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
-    if (sendEndSignal && target && currentUser) {
-      sendSignal(target, "end", "{}");
-    }
+    if (sendEndSignal && target && currentUser) sendSignal(target, "end", "{}");
     cleanupCall();
   }
 
   // ==========================================
-  // MESAJ GÖNDERME VE SES KAYIT
+  // MESAJ GÖNDERME VE SES KAYDI
   // ==========================================
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
@@ -962,7 +785,7 @@ export default function ChatPage() {
       sender: currentUser,
       receiver: activeChat.isGroup ? null : activeChat.name,
       group_id: activeChat.isGroup ? activeChat.id : null,
-      content: content,
+      content,
       message_type: isAudio ? "audio" : "text",
       created_at: new Date().toISOString(),
       isGroup: activeChat.isGroup,
@@ -971,65 +794,29 @@ export default function ChatPage() {
     };
 
     setMessages((prev) => [...prev, newMsg]);
+    saveMessageLocal(currentUser, activeChat.isGroup ? activeChat.id : activeChat.name, activeChat.isGroup, newMsg);
+    if (!activeChat.isGroup) addChatPartner(activeChat.name);
 
-    const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
-    saveMessageLocal(currentUser, targetId, activeChat.isGroup, newMsg);
-
-    if (!activeChat.isGroup) {
-      addChatPartner(activeChat.name);
-    }
-
-    if (signalChannelRef.current) {
-      signalChannelRef.current.send({
-        type: "broadcast",
-        event: "new_chat_msg",
-        payload: newMsg
-      });
-    }
+    if (signalChannelRef.current) signalChannelRef.current.send({ type: "broadcast", event: "new_chat_msg", payload: newMsg });
 
     try {
       if (activeChat.isGroup) {
-        await supabase.from("group_messages").insert([{
-          group_id: activeChat.id,
-          sender: currentUser,
-          content: content,
-          message_type: isAudio ? "audio" : "text",
-          created_at: newMsg.created_at
-        }]);
+        await supabase.from("group_messages").insert([{ group_id: activeChat.id, sender: currentUser, content, message_type: isAudio ? "audio" : "text", created_at: newMsg.created_at }]);
       } else {
-        await supabase.from("messages").insert([{
-          sender: currentUser,
-          receiver: activeChat.name,
-          content: content,
-          message_type: isAudio ? "audio" : "text",
-          status: newMsg.status,
-          is_read: false,
-          created_at: newMsg.created_at
-        }]);
+        await supabase.from("messages").insert([{ sender: currentUser, receiver: activeChat.name, content, message_type: isAudio ? "audio" : "text", status: newMsg.status, is_read: false, created_at: newMsg.created_at }]);
       }
-    } catch (e) {
-      console.error("Supabase insert:", e);
-    }
+    } catch {}
   }
 
   async function startRecordingAudio() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS });
       audioChunksRef.current = [];
-
       let options = { mimeType: "audio/webm" };
       if (typeof MediaRecorder !== "undefined") {
-        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-          options = { mimeType: "audio/webm;codecs=opus" };
-        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-          options = { mimeType: "audio/mp4" };
-        } else if (MediaRecorder.isTypeSupported("audio/aac")) {
-          options = { mimeType: "audio/aac" };
-        }
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) options = { mimeType: "audio/webm;codecs=opus" };
+        else if (MediaRecorder.isTypeSupported("audio/mp4")) options = { mimeType: "audio/mp4" };
       }
-
       const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
@@ -1037,34 +824,26 @@ export default function ChatPage() {
         const audioBlob = new Blob(audioChunksRef.current, { type: options.mimeType || "audio/webm" });
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
-        reader.onloadend = () => { sendMessage(reader.result as string); };
+        reader.onloadend = () => sendMessage(reader.result as string);
         stream.getTracks().forEach((t) => t.stop());
       };
       mediaRecorder.start();
       setIsRecordingAudio(true);
-    } catch { 
-      alert("Mikrofon izni verilmedi!"); 
-    }
+    } catch { alert("Mikrofon izni verilmedi!"); }
   }
 
-  function stopRecordingAudio() { 
-    if (mediaRecorderRef.current && isRecordingAudio) { 
-      mediaRecorderRef.current.stop(); 
-      setIsRecordingAudio(false); 
-    } 
+  function stopRecordingAudio() {
+    if (mediaRecorderRef.current && isRecordingAudio) {
+      mediaRecorderRef.current.stop();
+      setIsRecordingAudio(false);
+    }
   }
 
   async function createGroup() {
     if (!newGroupName.trim() || !currentUser) return;
     try {
       const allMembers = Array.from(new Set([currentUser, ...selectedMembers]));
-      const { data, error } = await supabase.from("groups").insert([{
-        name: newGroupName.trim(),
-        created_by: currentUser,
-        members: allMembers,
-        created_at: new Date().toISOString()
-      }]).select().single();
-
+      const { data, error } = await supabase.from("groups").insert([{ name: newGroupName.trim(), created_by: currentUser, members: allMembers, created_at: new Date().toISOString() }]).select().single();
       if (!error && data) {
         setGroups((prev) => [data, ...prev]);
         selectChat({ id: data.id, name: data.name, isGroup: true });
@@ -1072,15 +851,11 @@ export default function ChatPage() {
         setNewGroupName("");
         setSelectedMembers([]);
       }
-    } catch (err: any) { 
-      alert("Grup oluşturma hatası: " + err.message); 
-    }
+    } catch (err: any) { alert("Grup hatası: " + err.message); }
   }
 
   function toggleMemberSelection(username: string) {
-    setSelectedMembers((prev) => 
-      prev.includes(username) ? prev.filter((u) => u !== username) : [...prev, username]
-    );
+    setSelectedMembers((prev) => prev.includes(username) ? prev.filter((u) => u !== username) : [...prev, username]);
   }
 
   function handleLogout() {
@@ -1101,15 +876,13 @@ export default function ChatPage() {
     : users.filter((u) => {
         const isPartner = activeChatPartners.includes(u.username);
         const isLocked = lockedChats.includes(u.username);
-        if (tabFilter === "locked") return isLocked;
-        return isPartner && !isLocked;
+        return tabFilter === "locked" ? isLocked : isPartner && !isLocked;
       });
 
   const filteredGroups = groups.filter((g) => {
-    const matchesSearch = g.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matches = g.name.toLowerCase().includes(searchQuery.toLowerCase());
     const isLocked = lockedChats.includes(`grp_${g.id}`);
-    if (tabFilter === "locked") return matchesSearch && isLocked;
-    return matchesSearch && !isLocked;
+    return tabFilter === "locked" ? matches && isLocked : matches && !isLocked;
   });
 
   const sortedUsers = [...visibleUsers].sort((a, b) => {
@@ -1129,23 +902,18 @@ export default function ChatPage() {
 
   const displayMessages = messages.filter((m) => {
     if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
-    const msgTime = new Date(m.created_at).getTime();
-    const now = Date.now();
-    return (now - msgTime) < currentChatTimerHours * 60 * 60 * 1000;
+    return Date.now() - new Date(m.created_at).getTime() < currentChatTimerHours * 60 * 60 * 1000;
   });
 
   function getUserOnlineStatus(username: string) {
     const info = presenceMap[username];
-    if (info && info.online) {
-      return { text: "Çevrim İçi 🟢", isOnline: true };
-    }
-    return { text: "Çevrim Dışı", isOnline: false };
+    return info && info.online ? { text: "Çevrim İçi 🟢", isOnline: true } : { text: "Çevrim Dışı", isOnline: false };
   }
 
   return (
     <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
       
-      {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
+      {/* SİSTEM SESLERİ VE DOĞRUDAN SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
@@ -1171,11 +939,8 @@ export default function ChatPage() {
           <div className="flex items-center gap-1 flex-shrink-0">
             <button 
               onClick={() => {
-                if (!notificationsAllowed) {
-                  Notification.requestPermission().then((p) => setNotificationsAllowed(p === "granted"));
-                } else {
-                  alert("Bildirimler aktif ✔");
-                }
+                if (!notificationsAllowed) Notification.requestPermission().then((p) => setNotificationsAllowed(p === "granted"));
+                else alert("Bildirimler aktif ✔");
               }} 
               title={notificationsAllowed ? "Bildirimler Açık" : "Bildirim İzni Ver"} 
               className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${notificationsAllowed ? "bg-[#242f3d] text-[#14F195]" : "bg-amber-500/20 text-amber-400 animate-pulse"}`}
@@ -1194,15 +959,9 @@ export default function ChatPage() {
               <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setDogMenuOpen(false)} />
               <div className="absolute top-16 left-3 w-64 bg-[#1e293b] border border-[#14F195]/40 rounded-3xl p-4 shadow-2xl z-50 space-y-2">
                 <div className="flex items-center gap-2 pb-2 border-b border-gray-700">
-                  <div className="w-8 h-8 rounded-xl bg-[#242f3d] border border-[#14F195] flex items-center justify-center">
-                    <RishyouDogIcon size={20} />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-black text-white truncate">@{currentUser}</h4>
-                    <p className="text-[10px] text-[#14F195]">Rishyou Web3</p>
-                  </div>
+                  <div className="w-8 h-8 rounded-xl bg-[#242f3d] border border-[#14F195] flex items-center justify-center"><RishyouDogIcon size={20} /></div>
+                  <div><h4 className="text-xs font-black text-white truncate">@{currentUser}</h4><p className="text-[10px] text-[#14F195]">Rishyou Web3</p></div>
                 </div>
-
                 <button onClick={() => { setSettingsModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>✏️</span> Ayarlar & Gizlilik</button>
                 <button onClick={() => { setLeaderboardModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-amber-400 font-bold transition-colors cursor-pointer"><span>🏆</span> Bahşiş Liderleri</button>
                 <button onClick={() => { setQrModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>🎴</span> QR ile Ödeme Al</button>
@@ -1216,16 +975,12 @@ export default function ChatPage() {
 
         <div className="px-3 py-2 border-b border-[#242f3d] flex items-center gap-3 overflow-x-auto">
           <div onClick={() => setStoryModalOpen(true)} className="flex flex-col items-center flex-shrink-0 cursor-pointer group">
-            <div className="w-11 h-11 rounded-full border-2 border-dashed border-[#14F195] p-0.5 flex items-center justify-center bg-[#242f3d] group-hover:scale-105 transition-transform">
-              <span className="text-base text-[#14F195] font-black">+</span>
-            </div>
+            <div className="w-11 h-11 rounded-full border-2 border-dashed border-[#14F195] p-0.5 flex items-center justify-center bg-[#242f3d] group-hover:scale-105 transition-transform"><span className="text-base text-[#14F195] font-black">+</span></div>
             <span className="text-[10px] text-gray-400 mt-1">Hikayen</span>
           </div>
           {stories.map((s) => (
             <div key={s.id} onClick={() => setActiveStoryView(s)} className="flex flex-col items-center flex-shrink-0 cursor-pointer group">
-              <div className="w-11 h-11 rounded-full border-2 border-[#14F195] p-0.5 flex items-center justify-center bg-gradient-to-tr from-[#9945FF] to-[#14F195] group-hover:scale-105 transition-transform">
-                <span className="text-xs font-black text-black">{s.user.slice(0, 2).toUpperCase()}</span>
-              </div>
+              <div className="w-11 h-11 rounded-full border-2 border-[#14F195] p-0.5 flex items-center justify-center bg-gradient-to-tr from-[#9945FF] to-[#14F195] group-hover:scale-105 transition-transform"><span className="text-xs font-black text-black">{s.user.slice(0, 2).toUpperCase()}</span></div>
               <span className="text-[10px] text-gray-300 mt-1 truncate max-w-[50px]">@{s.user}</span>
             </div>
           ))}
@@ -1234,31 +989,15 @@ export default function ChatPage() {
         <div className="p-3 pb-0">
           <div onClick={() => setVaultModalOpen(true)} className="p-3 rounded-2xl bg-[#242f3d]/60 border border-[#14F195]/30 hover:border-[#14F195] cursor-pointer transition-all flex items-center gap-3 shadow-md group">
             <div className="w-9 h-9 rounded-xl bg-[#17212b] flex items-center justify-center text-base shadow border border-white/5">🔒</div>
-            <div className="min-w-0 flex-1">
-              <h4 className="text-xs font-bold text-white group-hover:text-[#14F195] transition-colors">Kişisel Kasa</h4>
-              <p className="text-[10px] text-gray-400 truncate">Her cihazda eşitlenen özel notlar</p>
-            </div>
+            <div className="min-w-0 flex-1"><h4 className="text-xs font-bold text-white group-hover:text-[#14F195] transition-colors">Kişisel Kasa</h4><p className="text-[10px] text-gray-400 truncate">Her cihazda eşitlenen özel notlar</p></div>
           </div>
         </div>
 
-        {/* SEKME FİLTRELERİ */}
         <div className="flex px-3 pt-2.5 gap-1">
           <button onClick={() => setTabFilter("all")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "all" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Tümü</button>
           <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gelen</button>
           <button onClick={() => setTabFilter("groups")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "groups" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gruplar</button>
-          <button 
-            onClick={() => {
-              if (!isLockedTabUnlocked) {
-                setPinPromptModalOpen(true);
-              } else {
-                setTabFilter("locked");
-              }
-            }} 
-            className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1 ${tabFilter === "locked" ? "bg-amber-500 text-black shadow" : "bg-[#242f3d] text-amber-400 hover:text-amber-300"}`}
-            title="PIN Korumalı Gizli Sohbetler"
-          >
-            <span>🔒</span><span>Gizli</span>
-          </button>
+          <button onClick={() => { if (!isLockedTabUnlocked) setPinPromptModalOpen(true); else setTabFilter("locked"); }} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1 ${tabFilter === "locked" ? "bg-amber-500 text-black shadow" : "bg-[#242f3d] text-amber-400 hover:text-amber-300"}`} title="PIN Korumalı Gizli Sohbetler"><span>🔒</span><span>Gizli</span></button>
         </div>
 
         <div className="p-3">
@@ -1275,7 +1014,6 @@ export default function ChatPage() {
             const isPinned = pinnedChats.includes(g.id);
             const isLocked = lockedChats.includes(`grp_${g.id}`);
             const hasTimer = (chatTimers[`grp_${g.id}`] || 0) > 0;
-
             return (
               <div key={`grp_${g.id}`} onClick={() => selectChat({ id: g.id, name: g.name, isGroup: true })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#9945FF]" : "hover:bg-[#202b36]"}`}>
                 <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#673AB7] flex items-center justify-center font-black text-white text-xs shadow-md flex-shrink-0">👥</div>
@@ -1284,14 +1022,12 @@ export default function ChatPage() {
                     <span className="text-xs font-bold text-white truncate">{g.name}</span>
                     <div className="flex items-center gap-1.5">
                       {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
-                      <button onClick={(e) => toggleLockChat(`grp_${g.id}`, e)} className={`text-[11px] ${isLocked ? "text-amber-400 opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`} title={isLocked ? "Gizli Sohbetten Çıkar" : "Gizli Sohbete Al (Kitle)"}>🔒</button>
+                      <button onClick={(e) => toggleLockChat(`grp_${g.id}`, e)} className={`text-[11px] ${isLocked ? "text-amber-400 opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>🔒</button>
                       <button onClick={(e) => togglePin(g.id, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
                       <span className="text-[9px] bg-[#9945FF]/30 text-[#AB9FF2] px-1.5 py-0.5 rounded font-bold">Özel Grup</span>
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-400 truncate">
-                    {g.created_by === currentUser ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}
-                  </p>
+                  <p className="text-[10px] text-gray-400 truncate">{g.created_by === currentUser ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}</p>
                 </div>
               </div>
             );
@@ -1303,42 +1039,27 @@ export default function ChatPage() {
             const isLocked = lockedChats.includes(u.username);
             const statusInfo = getUserOnlineStatus(u.username);
             const hasTimer = (chatTimers[u.username] || 0) > 0;
-
             return (
               <div key={`usr_${u.username}`} onClick={() => selectChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
                 <div className="relative flex-shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] flex items-center justify-center font-black text-black text-xs shadow-md">
-                    {u.username.slice(0, 2).toUpperCase()}
-                  </div>
-                  {statusInfo.isOnline && (
-                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-[#14F195] border-2 border-[#17212b] rounded-full"></span>
-                  )}
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] flex items-center justify-center font-black text-black text-xs shadow-md">{u.username.slice(0, 2).toUpperCase()}</div>
+                  {statusInfo.isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-[#14F195] border-2 border-[#17212b] rounded-full"></span>}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white truncate">@{u.username}</span>
                     <div className="flex items-center gap-1.5">
                       {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
-                      <button onClick={(e) => toggleLockChat(u.username, e)} className={`text-[11px] ${isLocked ? "text-amber-400 opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`} title={isLocked ? "Gizli Sohbetten Çıkar" : "Gizli Sohbete Al (Kitle)"}>🔒</button>
+                      <button onClick={(e) => toggleLockChat(u.username, e)} className={`text-[11px] ${isLocked ? "text-amber-400 opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>🔒</button>
                       <button onClick={(e) => togglePin(u.username, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
-                      <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
-                        {statusInfo.text}
-                      </span>
+                      <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>{statusInfo.text}</span>
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-400 truncate">
-                    {u.wallet_address ? `${u.wallet_address.slice(0, 4)}...${u.wallet_address.slice(-4)}` : "Solana Cüzdanı"}
-                  </p>
+                  <p className="text-[10px] text-gray-400 truncate">{u.wallet_address ? `${u.wallet_address.slice(0, 4)}...${u.wallet_address.slice(-4)}` : "Solana Cüzdanı"}</p>
                 </div>
               </div>
             );
           })}
-
-          {(tabFilter === "all" || tabFilter === "direct" || tabFilter === "locked") && sortedUsers.length === 0 && (
-            <div className="text-center py-8 px-4 text-gray-500 text-xs">
-              {tabFilter === "locked" ? "Gizli sohbetiniz bulunmuyor. Herhangi bir sohbeti 🔒 ikonuna basarak buraya kilitleyebilirsiniz." : searchQuery.trim() ? "Kullanıcı bulunamadı." : "Gelen kutunuz boş. Üstteki arama çubuğundan kullanıcı adı arayarak sohbet başlatın."}
-            </div>
-          )}
         </div>
       </aside>
 
@@ -1357,26 +1078,13 @@ export default function ChatPage() {
                 <div className="min-w-0">
                   <h2 className="text-xs font-bold text-white truncate leading-tight">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
                   <div className="flex items-center gap-1 truncate">
-                    <span className="text-[9px] sm:text-[10px] text-[#14F195] truncate">
-                      {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
-                    </span>
-                    {currentChatTimerHours > 0 && (
-                      <span className="text-[8px] sm:text-[9px] bg-amber-500/25 text-amber-400 px-1 py-0.1 rounded font-bold flex-shrink-0">
-                        ⏱️ {currentChatTimerHours === 24 ? "24s" : currentChatTimerHours === 1 ? "1s" : "7g"}
-                      </span>
-                    )}
+                    <span className="text-[9px] sm:text-[10px] text-[#14F195] truncate">{activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}</span>
+                    {currentChatTimerHours > 0 && <span className="text-[8px] sm:text-[9px] bg-amber-500/25 text-amber-400 px-1 py-0.1 rounded font-bold flex-shrink-0">⏱️ {currentChatTimerHours === 24 ? "24s" : currentChatTimerHours === 1 ? "1s" : "7g"}</span>}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
-                <button 
-                  onClick={() => setChatTimerModalOpen(true)} 
-                  title="Sadece Bu Sohbet İçin Mesaj Silme Süresi" 
-                  className={`p-1 sm:p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${currentChatTimerHours > 0 ? "bg-amber-500/20 text-amber-400 border border-amber-500/40" : "bg-[#242f3d] hover:bg-[#2b394a] text-gray-300"}`}
-                >
-                  ⏱️
-                </button>
-
+                <button onClick={() => setChatTimerModalOpen(true)} title="Sohbet Silme Süresi" className={`p-1 sm:p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${currentChatTimerHours > 0 ? "bg-amber-500/20 text-amber-400 border border-amber-500/40" : "bg-[#242f3d] hover:bg-[#2b394a] text-gray-300"}`}>⏱️</button>
                 <button onClick={() => setVaultModalOpen(true)} title="Kasa" className="p-1 sm:p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">📁</button>
                 <button onClick={() => setQrModalOpen(true)} title="QR Kod" className="p-1 sm:p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">🎴</button>
                 <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı" className="p-1 sm:p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">⭐</button>
@@ -1387,9 +1095,7 @@ export default function ChatPage() {
                     <button onClick={() => startCall(true)} title="Görüntülü Arama" className="p-1 sm:p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📹</button>
                   </>
                 )}
-                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-[11px] sm:text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer">
-                  <span>💸</span><span className="hidden sm:inline">Bahşiş</span>
-                </button>
+                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-[11px] sm:text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer"><span>💸</span><span className="hidden sm:inline">Bahşiş</span></button>
               </div>
             </div>
 
@@ -1407,31 +1113,16 @@ export default function ChatPage() {
                 const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";
                 const isRead = m.is_read || m.status === "read";
-
                 return (
                   <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto"}`}>
-                      {activeChat.isGroup && !isMe && (
-                        <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
-                      )}
-                      {isAudio ? (
-                        <div className="py-0.5">
-                          <audio controls src={m.content} playsInline className="w-[190px] sm:w-[220px] h-8 rounded-lg accent-[#14F195]" />
-                        </div>
-                      ) : (
-                        <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>
-                      )}
+                      {activeChat.isGroup && !isMe && <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>}
+                      {isAudio ? <div className="py-0.5"><audio controls src={m.content} playsInline className="w-[190px] sm:w-[220px] h-8 rounded-lg accent-[#14F195]" /></div> : <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>}
                       <div className="flex items-center justify-end gap-1 text-[8.5px] sm:text-[9px] text-gray-300/70 mt-0.5">
                         <span>{new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                         {isMe && !activeChat.isGroup && (
                           <span className="font-bold">
-                            {isRead && !disableReadReceipts ? (
-                              <span className="text-[#14F195]" title="Okundu (Mavi Tık)">✓✓</span>
-                            ) : m.status === "delivered" ? (
-                              <span className="text-gray-300" title="İletildi">✓✓</span>
-                            ) : (
-                              <span className="text-gray-400" title="Gönderildi">✓</span>
-                            )}
+                            {isRead && !disableReadReceipts ? <span className="text-[#14F195]" title="Okundu (Mavi Tık)">✓✓</span> : m.status === "delivered" ? <span className="text-gray-300" title="İletildi">✓✓</span> : <span className="text-gray-400" title="Gönderildi">✓</span>}
                           </span>
                         )}
                       </div>
@@ -1447,33 +1138,23 @@ export default function ChatPage() {
               {showEmojiPicker && (
                 <div className="absolute bottom-[65px] left-3 bg-[#1e293b] border border-gray-600 rounded-2xl p-2.5 shadow-2xl z-50">
                   <div className="grid grid-cols-6 gap-2 text-lg">
-                    {["😀","😂","🥰","😎","🤩","😭","😡","🐶","🚀","🔥","💎","💸"].map(emoji => (
-                      <button key={emoji} type="button" onClick={() => setText(prev => prev + emoji)} className="hover:scale-125 transition-transform cursor-pointer p-1">
-                        {emoji}
-                      </button>
+                    {["😀","😂","🥰","😎","🤩","😭","😡","🐶","🚀","🔥","💎","💸"].map((emoji) => (
+                      <button key={emoji} type="button" onClick={() => setText((prev) => prev + emoji)} className="hover:scale-125 transition-transform cursor-pointer p-1">{emoji}</button>
                     ))}
                   </div>
                 </div>
               )}
               <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto">
-                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-2xl text-base sm:text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
-                  😊
-                </button>
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-2xl text-base sm:text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">😊</button>
                 <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3 py-2 sm:py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" />
-                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2 sm:p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">
-                  {isRecordingAudio ? "⏹️" : "🎙️"}
-                </button>
-                <button type="submit" disabled={!text.trim()} className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">
-                  Gönder
-                </button>
+                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2 sm:p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">{isRecordingAudio ? "⏹️" : "🎙️"}</button>
+                <button type="submit" disabled={!text.trim()} className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">Gönder</button>
               </form>
             </div>
           </>
         ) : (
           <div className="hidden md:flex flex-1 flex-col items-center justify-center text-center p-6 text-gray-400">
-            <div className="w-20 h-20 rounded-3xl bg-[#17212b] border border-[#14F195]/20 flex items-center justify-center mb-4 shadow-xl">
-              <RishyouDogIcon size={52} />
-            </div>
+            <div className="w-20 h-20 rounded-3xl bg-[#17212b] border border-[#14F195]/20 flex items-center justify-center mb-4 shadow-xl"><RishyouDogIcon size={52} /></div>
             <h3 className="text-base font-bold text-white mb-1">Rishyou Web3 Messenger</h3>
             <p className="text-xs text-gray-500 max-w-xs">Gelen kutunuzdaki bir sohbeti seçin veya yukarıdan kişi arayın.</p>
           </div>
@@ -1484,41 +1165,21 @@ export default function ChatPage() {
       {callModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/95 backdrop-blur-xl">
           <div className="w-full max-w-md bg-[#17212b] border border-[#14F195]/40 rounded-3xl p-5 text-center space-y-4 shadow-2xl">
-            
             <div className={`relative w-full bg-black rounded-2xl overflow-hidden ${isVideoCall ? "h-64 border border-gray-700" : "hidden"}`}>
               <video ref={remoteVideoRef} autoPlay playsInline muted={isSpeakerOff} className="w-full h-full object-cover" />
               <video ref={localVideoRef} autoPlay playsInline muted className="absolute bottom-2 right-2 w-24 h-20 object-cover rounded-xl border-2 border-[#14F195]" />
             </div>
-
-            {!isVideoCall && (
-              <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] mx-auto flex items-center justify-center text-3xl shadow-lg animate-pulse">
-                📞
-              </div>
-            )}
-            
+            {!isVideoCall && <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] mx-auto flex items-center justify-center text-3xl shadow-lg animate-pulse">📞</div>}
             <div>
               <h3 className="text-base font-black text-white">@{activeChat?.name || incomingCall?.sender || currentCallPartnerRef.current}</h3>
               <p className="text-xs text-[#14F195] font-mono mt-1 font-bold">{callStatus}</p>
-              {isCallActive && (
-                <p className="text-xs text-amber-400 font-mono mt-0.5 font-bold">⏱️ {formatCallTime(callDuration)}</p>
-              )}
+              {isCallActive && <p className="text-xs text-amber-400 font-mono mt-0.5 font-bold">⏱️ {formatCallTime(callDuration)}</p>}
             </div>
-            
             <div className="flex justify-center flex-wrap gap-2 pt-2">
-              <button onClick={() => setIsMuted(!isMuted)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isMuted ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>
-                {isMuted ? "🔇 Mik Aç" : "🎙️ Mik Kapat"}
-              </button>
-              <button onClick={() => setIsSpeakerOff(!isSpeakerOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isSpeakerOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>
-                {isSpeakerOff ? "🔇 Hoparlör Aç" : "🔊 Hoparlör Kapat"}
-              </button>
-              {isVideoCall && (
-                <button onClick={() => setCameraOff(!cameraOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${cameraOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>
-                  {cameraOff ? "📹 Kamera Aç" : "🚫 Kamera Kapat"}
-                </button>
-              )}
-              <button onClick={() => endCall(true)} className="p-3 px-5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-black active:scale-95 cursor-pointer shadow-lg shadow-red-500/30">
-                🔴 Sonlandır
-              </button>
+              <button onClick={() => setIsMuted(!isMuted)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isMuted ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{isMuted ? "🔇 Mik Aç" : "🎙️ Mik Kapat"}</button>
+              <button onClick={() => setIsSpeakerOff(!isSpeakerOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isSpeakerOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{isSpeakerOff ? "🔇 Hoparlör Aç" : "🔊 Hoparlör Kapat"}</button>
+              {isVideoCall && <button onClick={() => setCameraOff(!cameraOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${cameraOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{cameraOff ? "📹 Kamera Aç" : "🚫 Kamera Kapat"}</button>}
+              <button onClick={() => endCall(true)} className="p-3 px-5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-black active:scale-95 cursor-pointer shadow-lg shadow-red-500/30">🔴 Sonlandır</button>
             </div>
           </div>
         </div>
@@ -1527,17 +1188,10 @@ export default function ChatPage() {
       {/* GELEN ARAMA BİLDİRİMİ */}
       {incomingCall && (
         <div className="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:w-84 z-50 bg-[#17212b] border-2 border-[#14F195] rounded-3xl p-4 shadow-2xl flex items-center justify-between animate-bounce">
-          <div>
-            <h4 className="text-xs font-black text-white">Gelen Arama</h4>
-            <p className="text-xs text-[#14F195] font-bold">@{incomingCall.sender}</p>
-          </div>
+          <div><h4 className="text-xs font-black text-white">Gelen Arama</h4><p className="text-xs text-[#14F195] font-bold">@{incomingCall.sender}</p></div>
           <div className="flex gap-2">
-            <button onClick={acceptCall} className="py-2 px-3 bg-[#14F195] text-black rounded-xl text-xs font-black cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">
-              Cevapla
-            </button>
-            <button onClick={() => endCall(true)} className="py-2 px-3 bg-red-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">
-              Reddet
-            </button>
+            <button onClick={acceptCall} className="py-2 px-3 bg-[#14F195] text-black rounded-xl text-xs font-black cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">Cevapla</button>
+            <button onClick={() => endCall(true)} className="py-2 px-3 bg-red-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">Reddet</button>
           </div>
         </div>
       )}
@@ -1549,15 +1203,7 @@ export default function ChatPage() {
             <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center text-2xl">🔒</div>
             <h3 className="text-sm font-black text-white">Gizli Sohbet PIN Kilidi</h3>
             <p className="text-xs text-gray-400">Gizli sohbetlerinizi görüntülemek için 4 haneli PIN şifrenizi girin:</p>
-            <input 
-              type="password" 
-              maxLength={4} 
-              value={enteredPin} 
-              onChange={(e) => setEnteredPin(e.target.value)} 
-              placeholder="••••" 
-              className="w-full bg-[#242f3d] border border-gray-700 text-center text-xl tracking-widest text-white p-2.5 rounded-xl focus:outline-none focus:border-amber-400"
-              autoFocus
-            />
+            <input type="password" maxLength={4} value={enteredPin} onChange={(e) => setEnteredPin(e.target.value)} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-xl tracking-widest text-white p-2.5 rounded-xl focus:outline-none focus:border-amber-400" autoFocus />
             <div className="flex gap-2">
               <button onClick={() => { setPinPromptModalOpen(false); setEnteredPin(""); setPendingLockedChat(null); }} className="flex-1 py-2 bg-[#242f3d] text-gray-300 font-bold text-xs rounded-xl cursor-pointer hover:text-white">İptal</button>
               <button onClick={handlePinSubmit} className="flex-1 py-2 bg-amber-500 text-black font-black text-xs rounded-xl cursor-pointer hover:bg-amber-400">Kilidi Aç</button>
@@ -1571,14 +1217,10 @@ export default function ChatPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-[#17212b] border border-amber-500/40 rounded-3xl p-5 shadow-2xl space-y-3">
             <div className="flex items-center justify-between border-b border-gray-700 pb-2">
-              <h3 className="text-xs font-black text-amber-400 flex items-center gap-1.5">
-                <span>⏱️</span> Süreli Mesajlar ({activeChat.isGroup ? activeChat.name : `@${activeChat.name}`})
-              </h3>
+              <h3 className="text-xs font-black text-amber-400 flex items-center gap-1.5"><span>⏱️</span> Süreli Mesajlar ({activeChat.isGroup ? activeChat.name : `@${activeChat.name}`})</h3>
               <button onClick={() => setChatTimerModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
-            <p className="text-[11px] text-gray-400">
-              Bu sohbet için seçilen süreden eski mesajlar otomatik olarak temizlenir. Diğer kişilerle olan konuşmalarınız etkilenmez.
-            </p>
+            <p className="text-[11px] text-gray-400">Bu sohbet için seçilen süreden eski mesajlar otomatik olarak temizlenir. Diğer kişilerle olan konuşmalarınız etkilenmez.</p>
             <div className="space-y-1.5">
               {[
                 { label: "Kapalı (Mesajlar Silinmez)", hours: 0 },
@@ -1586,11 +1228,7 @@ export default function ChatPage() {
                 { label: "24 Saat Sonra Sil (Önerilen)", hours: 24 },
                 { label: "7 Gün Sonra Sil", hours: 168 }
               ].map((opt) => (
-                <button
-                  key={opt.hours}
-                  onClick={() => setAutoDeleteForCurrentChat(opt.hours)}
-                  className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer flex items-center justify-between ${currentChatTimerHours === opt.hours ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}
-                >
+                <button key={opt.hours} onClick={() => setAutoDeleteForCurrentChat(opt.hours)} className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer flex items-center justify-between ${currentChatTimerHours === opt.hours ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}>
                   <span>{opt.label}</span>
                   {currentChatTimerHours === opt.hours && <span>✔</span>}
                 </button>
@@ -1618,18 +1256,9 @@ export default function ChatPage() {
             </div>
             {settingsTab === "privacy" && (
               <div className="space-y-2">
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
-                  <span className="flex items-center gap-2">👤 Çevrim İçi Durumunu Gizle</span>
-                  <input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); saveUserSettings({ hideOnline: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
-                </div>
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
-                  <span className="flex items-center gap-2">✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span>
-                  <input type="checkbox" checked={disableReadReceipts} onChange={(e) => { setDisableReadReceipts(e.target.checked); saveUserSettings({ disableReadReceipts: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
-                </div>
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
-                  <span className="flex items-center gap-2">🛡️ Ekran Görüntüsü Koruması</span>
-                  <input type="checkbox" checked={screenshotProtection} onChange={(e) => { setScreenshotProtection(e.target.checked); saveUserSettings({ screenshotProtection: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
-                </div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span>👤 Çevrim İçi Durumunu Gizle</span><input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); saveUserSettings({ hideOnline: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span>✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span><input type="checkbox" checked={disableReadReceipts} onChange={(e) => { setDisableReadReceipts(e.target.checked); saveUserSettings({ disableReadReceipts: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div>
+                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span>🛡️ Ekran Görüntüsü Koruması</span><input type="checkbox" checked={screenshotProtection} onChange={(e) => { setScreenshotProtection(e.target.checked); saveUserSettings({ screenshotProtection: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div>
               </div>
             )}
             {settingsTab === "lang" && (
@@ -1640,28 +1269,13 @@ export default function ChatPage() {
               </div>
             )}
             {settingsTab === "sound" && (
-              <div className="space-y-2">
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
-                  <span>Mesaj Bildirim ve Arama Sesleri</span>
-                  <input type="checkbox" checked={soundEnabled} onChange={(e) => { setSoundEnabled(e.target.checked); saveUserSettings({ soundEnabled: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
-                </div>
-              </div>
+              <div className="space-y-2"><div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200"><span>Mesaj Bildirim ve Arama Sesleri</span><input type="checkbox" checked={soundEnabled} onChange={(e) => { setSoundEnabled(e.target.checked); saveUserSettings({ soundEnabled: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" /></div></div>
             )}
             {settingsTab === "theme" && (
-              <div className="space-y-2">
-                <p className="text-xs text-gray-400">Vurgu Rengi Seçin:</p>
-                <div className="flex gap-2">
-                  {["#14F195", "#9945FF", "#3B82F6", "#EC4899", "#F59E0B"].map((c) => (
-                    <div key={c} style={{ backgroundColor: c }} className="w-8 h-8 rounded-full cursor-pointer border-2 border-white/30 hover:scale-110 transition-transform" />
-                  ))}
-                </div>
-              </div>
+              <div className="space-y-2"><p className="text-xs text-gray-400">Vurgu Rengi Seçin:</p><div className="flex gap-2">{["#14F195", "#9945FF", "#3B82F6", "#EC4899", "#F59E0B"].map((c) => (<div key={c} style={{ backgroundColor: c }} className="w-8 h-8 rounded-full cursor-pointer border-2 border-white/30 hover:scale-110 transition-transform" />))}</div></div>
             )}
             {settingsTab === "pin" && (
-              <div className="space-y-2 text-xs">
-                <p className="text-gray-400">Uygulama açılışı ve gizli sohbetler için 4 haneli PIN belirleyin:</p>
-                <input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); saveUserSettings({ appPin: e.target.value }); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
-              </div>
+              <div className="space-y-2 text-xs"><p className="text-gray-400">Uygulama açılışı ve gizli sohbetler için 4 haneli PIN belirleyin:</p><input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); saveUserSettings({ appPin: e.target.value }); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" /></div>
             )}
             <button onClick={() => setSettingsModalOpen(false)} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl shadow-lg cursor-pointer">Kaydet ve Kapat</button>
           </div>
@@ -1696,10 +1310,10 @@ export default function ChatPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-md bg-[#17212b] border border-[#14F195]/40 rounded-3xl p-5 shadow-2xl space-y-3">
             <div className="flex items-center justify-between border-b border-gray-700 pb-2"><h3 className="text-xs font-black text-white flex items-center gap-1.5"><span>🔒</span> Kişisel Kasa (@{currentUser})</h3><button onClick={() => setVaultModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button></div>
-            <div className="space-y-2"><textarea value={newVaultNote} onChange={(e) => setNewVaultNote(e.target.value)} placeholder="Özel şifre, seed kelimeleri veya gizli notunuzu buraya yazın..." className="w-full h-20 bg-[#242f3d] border border-gray-700 text-xs text-white p-2.5 rounded-xl focus:outline-none focus:border-[#14F195]" /><button onClick={saveVaultNote} className="w-full py-2 bg-[#14F195] text-black font-bold text-xs rounded-xl shadow-md cursor-pointer active:scale-95">Kasaya Ekle</button></div>
+            <div className="space-y-2"><textarea value={newVaultNote} onChange={(e) => setNewVaultNote(e.target.value)} placeholder="Özel şifre veya notunuz..." className="w-full h-20 bg-[#242f3d] border border-gray-700 text-xs text-white p-2.5 rounded-xl focus:outline-none focus:border-[#14F195]" /><button onClick={saveVaultNote} className="w-full py-2 bg-[#14F195] text-black font-bold text-xs rounded-xl shadow-md cursor-pointer active:scale-95">Kasaya Ekle</button></div>
             <div className="max-h-40 overflow-y-auto space-y-1.5 pt-2">
               {vaultNotes.map((n, idx) => (
-                <div key={idx} className="p-2.5 bg-[#242f3d] rounded-xl text-xs text-gray-200 border border-white/5 break-words flex justify-between items-center"><span>{n}</span><button onClick={() => { navigator.clipboard.writeText(n); alert("Panoya kopyalandı!"); }} className="text-[10px] text-[#14F195] font-bold ml-2 cursor-pointer">Kopyala</button></div>
+                <div key={idx} className="p-2.5 bg-[#242f3d] rounded-xl text-xs text-gray-200 border border-white/5 break-words flex justify-between items-center"><span>{n}</span><button onClick={() => { navigator.clipboard.writeText(n); alert("Kopyalandı!"); }} className="text-[10px] text-[#14F195] font-bold ml-2 cursor-pointer">Kopyala</button></div>
               ))}
             </div>
           </div>
@@ -1740,16 +1354,12 @@ export default function ChatPage() {
       {createGroupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-[#17212b] border border-gray-700 rounded-3xl p-5 shadow-2xl space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-700/60 pb-2.5">
-              <h3 className="text-sm font-black text-white flex items-center gap-1.5"><span>👥</span> Yeni Özel Grup Kur</h3>
-              <button onClick={() => setCreateGroupModal(false)} className="text-gray-400 hover:text-white text-sm cursor-pointer">✕</button>
-            </div>
+            <div className="flex items-center justify-between border-b border-gray-700/60 pb-2.5"><h3 className="text-sm font-black text-white flex items-center gap-1.5"><span>👥</span> Yeni Özel Grup Kur</h3><button onClick={() => setCreateGroupModal(false)} className="text-gray-400 hover:text-white text-sm cursor-pointer">✕</button></div>
             <input type="text" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="Grup Adı" className="w-full bg-[#242f3d] border border-gray-700 text-xs text-white p-2.5 rounded-xl focus:outline-none focus:border-[#14F195]" />
-            
             <div>
               <p className="text-[11px] text-gray-400 mb-1 font-bold">Gruba Dahil Edilecek Kişileri Seçin:</p>
               <div className="max-h-36 overflow-y-auto space-y-1 bg-[#242f3d]/50 p-2 rounded-xl border border-gray-700/60">
-                {users.map(u => (
+                {users.map((u) => (
                   <div key={u.username} onClick={() => toggleMemberSelection(u.username)} className={`p-1.5 rounded-lg text-xs flex items-center justify-between cursor-pointer transition-colors ${selectedMembers.includes(u.username) ? "bg-[#14F195]/20 text-[#14F195] font-bold" : "hover:bg-[#242f3d] text-gray-300"}`}>
                     <span>@{u.username}</span>
                     <span>{selectedMembers.includes(u.username) ? "✔ Seçildi" : "+ Ekle"}</span>
@@ -1757,7 +1367,6 @@ export default function ChatPage() {
                 ))}
               </div>
             </div>
-
             <button onClick={createGroup} disabled={!newGroupName.trim()} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer disabled:opacity-40">Grubu Oluştur</button>
           </div>
         </div>
@@ -1770,7 +1379,7 @@ export default function ChatPage() {
             <div className="p-3 bg-[#242f3d] rounded-2xl space-y-1 text-xs"><div className="flex justify-between"><span>SOL:</span><span className="font-bold text-white">{solBalance !== null ? `${solBalance.toFixed(4)} SOL` : "0.00 SOL"}</span></div><div className="flex justify-between"><span>$RISH:</span><span className="font-black text-[#14F195]">{rishBalance.toLocaleString()} $RISH</span></div></div>
             <input type="text" value={transferTarget} onChange={(e) => setTransferTarget(e.target.value)} placeholder="Alıcı kullanıcı adı" className="w-full bg-[#242f3d] border border-gray-700 text-xs text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
             <input type="number" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} placeholder="Miktar ($RISH)" className="w-full bg-[#242f3d] border border-gray-700 text-xs text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
-            <button onClick={() => { setRishBalance(prev => Math.max(0, prev - Number(transferAmount))); setTxStatus("Transfer Başarılı!"); }} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer">Transfer Et</button>
+            <button onClick={() => { setRishBalance((prev) => Math.max(0, prev - Number(transferAmount))); setTxStatus("Transfer Başarılı!"); }} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer">Transfer Et</button>
             {txStatus && <p className="text-[10px] text-center text-[#14F195]">{txStatus}</p>}
           </div>
         </div>
