@@ -96,7 +96,7 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
-  // ARAMA VE SES REFERANSLARI
+  // WEBRTC VE SES REFERANSLARI
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
@@ -113,6 +113,7 @@ export default function ChatPage() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const iceCandidateQueue = useRef<any[]>([]);
+  const signalChannelRef = useRef<any>(null);
 
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const dialtoneRef = useRef<HTMLAudioElement | null>(null);
@@ -134,7 +135,7 @@ export default function ChatPage() {
       loadGroups(user);
       loadWalletData(user);
       loadChatPartners(user);
-      subscribeToSignals(user);
+      initRealtimeSignaling(user);
 
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
@@ -147,7 +148,10 @@ export default function ChatPage() {
       setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
     }, 3000);
 
-    return () => clearInterval(tpsInterval);
+    return () => {
+      clearInterval(tpsInterval);
+      if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
+    };
   }, [router]);
 
   useEffect(() => {
@@ -303,45 +307,61 @@ export default function ChatPage() {
     } catch (err: any) { alert("Grup hatası: " + err.message); }
   }
 
-  // WEBRTC SİNYAL VE ANLIK DİNLEME
-  function subscribeToSignals(username: string) {
-    supabase
-      .channel(`signals_${username}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "signals", filter: `receiver=eq.${username}` }, async (payload) => {
-        const sig = payload.new;
-        
-        if (sig.type === "offer") {
-          currentCallPartnerRef.current = sig.sender;
-          setIncomingCall(sig);
-        } else if (sig.type === "answer" && peerConnectionRef.current) {
-          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(sig.payload)));
-          setCallStatus("Ses Hattı Bağlandı 🟢");
-          while (iceCandidateQueue.current.length > 0) {
-            const candidate = iceCandidateQueue.current.shift();
-            try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
-          }
-        } else if (sig.type === "candidate") {
-          const candidate = JSON.parse(sig.payload);
-          if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
-            try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
-          } else {
-            iceCandidateQueue.current.push(candidate);
-          }
-        } else if (sig.type === "end") {
-          cleanupCall();
+  // YENİ BROADCAST SİNYAL ALTYAPISI (Milisaniyelik İletim)
+  function initRealtimeSignaling(username: string) {
+    const channel = supabase.channel(`webrtc_signaling_room`, {
+      config: { broadcast: { self: false } }
+    });
+
+    channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
+      if (!payload || payload.receiver !== username) return;
+
+      if (payload.type === "offer") {
+        currentCallPartnerRef.current = payload.sender;
+        setIncomingCall(payload);
+      } else if (payload.type === "answer" && peerConnectionRef.current) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
+        setCallStatus("Ses Hattı Bağlandı 🟢");
+        while (iceCandidateQueue.current.length > 0) {
+          const candidate = iceCandidateQueue.current.shift();
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
         }
-      })
-      .subscribe();
+      } else if (payload.type === "candidate") {
+        const candidate = JSON.parse(payload.payload);
+        if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+        } else {
+          iceCandidateQueue.current.push(candidate);
+        }
+      } else if (payload.type === "end") {
+        cleanupCall();
+      }
+    });
+
+    channel.subscribe();
+    signalChannelRef.current = channel;
+  }
+
+  function sendSignal(receiver: string, type: string, payload: string) {
+    if (signalChannelRef.current) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { sender: currentUser, receiver, type, payload }
+      });
+    }
   }
 
   function createPeerConnection(targetUser: string) {
-    if (peerConnectionRef.current) peerConnectionRef.current.close();
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+    }
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = pc;
 
     pc.onicecandidate = (event) => {
       if (event.candidate && targetUser) {
-        supabase.from("signals").insert([{ sender: currentUser, receiver: targetUser, type: "candidate", payload: JSON.stringify(event.candidate) }]);
+        sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
       }
     };
 
@@ -349,6 +369,7 @@ export default function ChatPage() {
       const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
+        remoteAudioRef.current.muted = false;
         remoteAudioRef.current.play().catch(() => {});
       }
       if (remoteVideoRef.current) {
@@ -381,7 +402,10 @@ export default function ChatPage() {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: video ? { width: { ideal: 640 }, height: { ideal: 480 } } : false
+      });
     } catch {
       if (video) {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -401,7 +425,7 @@ export default function ChatPage() {
     try {
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: video });
       await pc.setLocalDescription(offer);
-      await supabase.from("signals").insert([{ sender: currentUser, receiver: target, type: "offer", payload: JSON.stringify(offer) }]);
+      sendSignal(target, "offer", JSON.stringify(offer));
     } catch {
       setCallStatus("Arama başlatılamadı.");
     }
@@ -423,7 +447,10 @@ export default function ChatPage() {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false
+      });
     } catch {
       if (isVideo) {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -445,7 +472,7 @@ export default function ChatPage() {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      await supabase.from("signals").insert([{ sender: currentUser, receiver: caller, type: "answer", payload: JSON.stringify(answer) }]);
+      sendSignal(caller, "answer", JSON.stringify(answer));
       
       setIncomingCall(null);
       setCallStatus("Ses Hattı Bağlandı 🟢");
@@ -459,9 +486,13 @@ export default function ChatPage() {
     }
   }
 
+  // DONANIMI KÖKTEN KAPATAN GÜÇLÜ KİLİT
   function cleanupCall() {
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current.getTracks().forEach((t) => {
+        t.stop();
+        t.enabled = false;
+      });
       localStreamRef.current = null;
     }
     if (peerConnectionRef.current) {
@@ -484,10 +515,10 @@ export default function ChatPage() {
     if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
   }
 
-  function endCall(sendSignal = true) {
+  function endCall(sendEndSignal = true) {
     const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
-    if (sendSignal && target && currentUser) {
-      supabase.from("signals").insert([{ sender: currentUser, receiver: target, type: "end", payload: "{}" }]);
+    if (sendEndSignal && target && currentUser) {
+      sendSignal(target, "end", "{}");
     }
     cleanupCall();
   }
@@ -907,7 +938,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ARAMA MODALI */}
+      {/* ARAMA EKRANI MODALI */}
       {callModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/90 backdrop-blur-xl">
           <div className="w-full max-w-md bg-[#17212b] border border-gray-700 rounded-3xl p-5 text-center space-y-3 shadow-2xl">
