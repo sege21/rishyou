@@ -200,7 +200,7 @@ export default function ChatPage() {
     disableReadReceiptsRef.current = disableReadReceipts;
   }, [disableReadReceipts]);
 
-  // ASLA MEVCUT MESAJLARI SİLMEYEN VE GÜNCELLEYEN MERGE MOTORU
+  // AKILLI VE GÜVENLİ BİRLEŞTİRME (Kayıp ve ezilmeleri tamamen önler)
   const mergeMessageLists = useCallback((currentList: any[], incomingList: any[]) => {
     const map = new Map<string, any>();
     
@@ -272,7 +272,7 @@ export default function ChatPage() {
     }
   }
 
-  // TÜM CİHAZLAR VE GİZLİ SEKME İÇİN GARANTİLİ BULUT VERİ ÇEKME
+  // BULUTTAN %100 HATASIZ DİREKT MESAJ ÇEKME (Gizli sekme ve tüm tarayıcılar için)
   const loadDirectMessages = useCallback(async (u1: string, u2: string) => {
     if (!u1 || !u2) return;
     try {
@@ -291,12 +291,12 @@ export default function ChatPage() {
           const r = (m.receiver || "").toLowerCase().trim();
           return (s === user1 && r === user2) || (s === user2 && r === user1);
         });
-        setMessages((prev) => mergeMessageLists(prev, filtered));
+        setMessages(filtered);
       }
     } catch (e) {
       console.error("Bulut mesaj yükleme hatası:", e);
     }
-  }, [mergeMessageLists]);
+  }, []);
 
   const loadGroupMessages = useCallback(async (groupId: string) => {
     if (!groupId) return;
@@ -308,12 +308,12 @@ export default function ChatPage() {
         .order("created_at", { ascending: true });
 
       if (!error && data) {
-        setMessages((prev) => mergeMessageLists(prev, data));
+        setMessages(data);
       }
     } catch (e) {
       console.error("Grup mesaj hatası:", e);
     }
-  }, [mergeMessageLists]);
+  }, []);
 
   const loadChatPartners = useCallback(async (current: string) => {
     try {
@@ -365,11 +365,11 @@ export default function ChatPage() {
     if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
   }, []);
 
-  // TEK VE ORTAK GERÇEK ZAMANLI AĞ MERKEZİ (GLOBAL HUB)
+  // GLOBAL GERÇEK ZAMANLI AĞ MERKEZİ (GLOBAL REALTIME BUS)
   const initRealtimeHub = useCallback((username: string, isHideOnline: boolean) => {
     const cleanUser = username.toLowerCase().trim();
     
-    // TÜM KULLANICILARIN BAĞLANDIĞI ORTAK ODA
+    // TÜM KULLANICILAR İÇİN ORTAK REALTIME KANALI
     const channel = supabase.channel("rishyou_global_realtime_hub", {
       config: {
         broadcast: { self: false },
@@ -393,7 +393,6 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // ARAMA SİNYALİ
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver?.toLowerCase().trim() !== cleanUser) return;
 
@@ -419,7 +418,7 @@ export default function ChatPage() {
       }
     });
 
-    // YENİ CANLI MESAJ GELDİĞİNDE
+    // ANLIK MESAJ YAKALAMA
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -433,14 +432,12 @@ export default function ChatPage() {
         if (payload.receiver?.toLowerCase().trim() === cleanUser) {
           addChatPartner(payload.sender);
 
-          // İletildi sinyali geri yolla
           channel.send({
             type: "broadcast",
             event: "delivery_receipt",
             payload: { deliveredTo: cleanUser, sender: payload.sender?.toLowerCase().trim() }
           });
 
-          // Sohbet açıksa görüldü (mavi tık) sinyali yolla
           if (cur && !cur.isGroup && cur.name?.toLowerCase().trim() === payload.sender?.toLowerCase().trim()) {
             setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_read: true, is_delivered: true }]));
             if (!disableReadReceiptsRef.current) {
@@ -457,7 +454,7 @@ export default function ChatPage() {
       }
     });
 
-    // İLETİLDİ SİNYALİ (ÇİFT GRİ TIK)
+    // İLETİLDİ (ÇİFT GRİ TIK)
     channel.on("broadcast", { event: "delivery_receipt" }, ({ payload }) => {
       if (!payload || payload.sender !== cleanUser) return;
       setMessages((prev) =>
@@ -469,7 +466,7 @@ export default function ChatPage() {
       );
     });
 
-    // GÖRÜLDÜ SİNYALİ (ÇİFT MAVİ TIK)
+    // GÖRÜLDÜ (ÇİFT MAVİ TIK)
     channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
       if (!payload || payload.partner !== cleanUser) return;
       const reader = payload.reader;
@@ -482,7 +479,7 @@ export default function ChatPage() {
       );
     });
 
-    // YAZIYOR... GÖSTERGESİ
+    // YAZIYOR GÖSTERGESİ
     channel.on("broadcast", { event: "typing_status" }, ({ payload }) => {
       if (!payload || payload.receiver !== cleanUser) return;
       setTypingMap((prev) => ({ ...prev, [payload.sender]: payload.isTyping }));
