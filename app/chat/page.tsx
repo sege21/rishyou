@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { supabase } from "@/lib/supabase";
@@ -9,10 +9,12 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
     { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
+
+// 403 HATASI VERMEYEN GÜVENİLİR SOLANA RPC
+const SOLANA_RPC = "https://rpc.ankr.com/solana";
 
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
   return (
@@ -39,58 +41,6 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
       <circle cx="50" cy="85" r="9" fill="#14F195" stroke="#9945FF" strokeWidth="1.5" />
       <path d="M46 83 L54 83 M45 85 L53 85 M46 87 L54 87" stroke="#000" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
-  );
-}
-
-function CompactAudioPlayer({ src }: { src: string }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-
-  function togglePlay() {
-    if (!audioRef.current) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-    }
-  }
-
-  function handleTimeUpdate() {
-    if (audioRef.current) {
-      const p = (audioRef.current.currentTime / (audioRef.current.duration || 1)) * 100;
-      setProgress(p);
-    }
-  }
-
-  return (
-    <div className="flex items-center gap-2 py-1 px-2.5 bg-black/40 rounded-xl my-0.5 max-w-[210px] select-none">
-      <audio 
-        ref={audioRef} 
-        src={src} 
-        onTimeUpdate={handleTimeUpdate} 
-        onEnded={() => { setIsPlaying(false); setProgress(0); }} 
-        className="hidden" 
-        playsInline 
-      />
-      <button 
-        type="button" 
-        onClick={togglePlay} 
-        className="w-7 h-7 rounded-full bg-[#14F195] hover:bg-[#12d684] text-black flex items-center justify-center text-xs font-black shadow-md active:scale-90 transition-transform cursor-pointer flex-shrink-0"
-      >
-        {isPlaying ? "⏸" : "▶"}
-      </button>
-      <div className="flex-1 flex flex-col justify-center gap-1">
-        <div className="h-1.5 w-full bg-gray-700/80 rounded-full overflow-hidden">
-          <div className="h-full bg-[#14F195] transition-all duration-100" style={{ width: `${progress}%` }} />
-        </div>
-        <div className="flex justify-between items-center text-[9px] text-gray-300/80 font-medium">
-          <span>{isPlaying ? "Oynatılıyor..." : "Ses Kaydı"}</span>
-          <span>🎙️</span>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -132,9 +82,6 @@ export default function ChatPage() {
   const [appPin, setAppPin] = useState("");
   const [lang, setLang] = useState("tr");
 
-  const [typingMap, setTypingMap] = useState<Record<string, boolean>>({});
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
 
   const [solPrice, setSolPrice] = useState<number>(96.40);
@@ -171,7 +118,6 @@ export default function ChatPage() {
   
   const activeChatRef = useRef<any>(null);
   const groupsRef = useRef<any[]>([]);
-  const disableReadReceiptsRef = useRef(false);
   const currentCallPartnerRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -196,322 +142,109 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  useEffect(() => {
-    disableReadReceiptsRef.current = disableReadReceipts;
-  }, [disableReadReceipts]);
+  function getChatStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
+    return isGroup ? `rishyou_chat_grp_${partnerOrGroupId}` : `rishyou_chat_dm_${[user, partnerOrGroupId].sort().join("_")}`;
+  }
 
-  const mergeMessageLists = useCallback((currentList: any[], incomingList: any[]) => {
-    const map = new Map<string, any>();
-    
-    currentList.forEach((m) => {
-      const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase().trim()}_${m.created_at}_${m.content}`;
-      map.set(key, m);
-    });
-
-    incomingList.forEach((m) => {
-      const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase().trim()}_${m.created_at}_${m.content}`;
-      const existing = map.get(key);
-      if (existing) {
-        map.set(key, { ...existing, ...m, is_read: m.is_read ?? existing.is_read, is_delivered: m.is_delivered ?? existing.is_delivered });
-      } else {
-        map.set(key, m);
-      }
-    });
-
-    return Array.from(map.values()).sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-  }, []);
-
-  const addChatPartner = useCallback((partnerName: string) => {
-    if (!currentUser || !partnerName) return;
-    const cleanPartner = partnerName.trim();
-    setActiveChatPartners((prev) => {
-      const exists = prev.some((p) => p.toLowerCase() === cleanPartner.toLowerCase());
-      if (!exists) {
-        return [cleanPartner, ...prev];
-      }
-      return prev;
-    });
-  }, [currentUser]);
-
-  const sendReadReceipt = useCallback(async (partnerName: string) => {
-    if (!currentUser || !partnerName || disableReadReceiptsRef.current) return;
-    const cleanUser = currentUser.toLowerCase().trim();
-    const cleanPartner = partnerName.toLowerCase().trim();
-
-    if (signalChannelRef.current) {
-      signalChannelRef.current.send({
-        type: "broadcast",
-        event: "read_receipt",
-        payload: { reader: cleanUser, partner: cleanPartner }
-      });
-    }
-
+  function saveMessageToStorage(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
     try {
-      await supabase
-        .from("messages")
-        .update({ is_read: true, is_delivered: true })
-        .ilike("receiver", cleanUser)
-        .ilike("sender", cleanPartner);
+      const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
+      const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
+      const exists = existing.some(
+        (m) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
+      );
+      if (!exists) {
+        existing.push(msg);
+        localStorage.setItem(key, JSON.stringify(existing));
+      }
     } catch {}
-  }, [currentUser]);
+  }
+
+  function getMessagesFromStorage(user: string, partnerOrGroupId: string, isGroup: boolean): any[] {
+    try {
+      const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
+      return JSON.parse(localStorage.getItem(key) || "[]");
+    } catch {
+      return [];
+    }
+  }
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
     if (chat && currentUser) {
-      sessionStorage.setItem("rishyou_active_chat", JSON.stringify(chat));
+      localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(chat));
       if (!chat.isGroup) {
         addChatPartner(chat.name);
-        sendReadReceipt(chat.name);
       }
-    } else {
-      sessionStorage.removeItem("rishyou_active_chat");
+    } else if (currentUser) {
+      localStorage.removeItem(`rishyou_last_active_${currentUser}`);
     }
   }
 
-  // BULUTTAN %100 HATASIZ DİREKT MESAJ ÇEKME (Gizli sekme ve tüm tarayıcılar için)
-  const loadDirectMessages = useCallback(async (u1: string, u2: string) => {
-    if (!u1 || !u2) return;
-    try {
-      const user1 = u1.toLowerCase().trim();
-      const user2 = u2.toLowerCase().trim();
-
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .order("created_at", { ascending: true });
-
-      if (!error && data) {
-        const filtered = data.filter((m: any) => {
-          const s = (m.sender || "").toLowerCase().trim();
-          const r = (m.receiver || "").toLowerCase().trim();
-          return (s === user1 && r === user2) || (s === user2 && r === user1);
-        });
-        setMessages(filtered);
+  function addChatPartner(partnerName: string) {
+    if (!currentUser) return;
+    setActiveChatPartners((prev) => {
+      if (!prev.includes(partnerName)) {
+        const updated = [partnerName, ...prev];
+        localStorage.setItem(`rishyou_partners_${currentUser}`, JSON.stringify(updated));
+        return updated;
       }
-    } catch (e) {
-      console.error("Bulut mesaj yükleme hatası:", e);
-    }
-  }, []);
-
-  const loadGroupMessages = useCallback(async (groupId: string) => {
-    if (!groupId) return;
-    try {
-      const { data, error } = await supabase
-        .from("group_messages")
-        .select("*")
-        .eq("group_id", groupId)
-        .order("created_at", { ascending: true });
-
-      if (!error && data) {
-        setMessages(data);
-      }
-    } catch (e) {
-      console.error("Grup mesaj hatası:", e);
-    }
-  }, []);
-
-  const loadChatPartners = useCallback(async (current: string) => {
-    try {
-      const myName = current.toLowerCase().trim();
-      const { data } = await supabase
-        .from("messages")
-        .select("sender, receiver")
-        .order("created_at", { ascending: false });
-
-      if (data) {
-        const partners = new Set<string>();
-        data.forEach((m) => {
-          const s = (m.sender || "").trim();
-          const r = (m.receiver || "").trim();
-          if (s.toLowerCase() === myName && r) partners.add(r);
-          if (r.toLowerCase() === myName && s) partners.add(s);
-        });
-        setActiveChatPartners(Array.from(partners));
-      }
-    } catch {}
-  }, []);
-
-  const cleanupCall = useCallback(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => {
-        t.stop();
-        t.enabled = false;
-      });
-      localStreamRef.current = null;
-    }
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-    iceCandidateQueue.current = [];
-    setLocalStreamState(null);
-    setCallModalOpen(false);
-    setIncomingCall(null);
-    setCallStatus("");
-    currentCallPartnerRef.current = null;
-    setIsMuted(false);
-    setIsSpeakerOff(false);
-    setCameraOff(false);
-
-    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
-    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
-    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
-    if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
-  }, []);
-
-  // GLOBAL GERÇEK ZAMANLI AĞ MERKEZİ (GLOBAL REALTIME BUS)
-  const initRealtimeHub = useCallback((username: string, isHideOnline: boolean) => {
-    const cleanUser = username.toLowerCase().trim();
-    
-    const channel = supabase.channel("rishyou_global_realtime_hub", {
-      config: {
-        broadcast: { self: false },
-        presence: { key: cleanUser }
-      }
+      return prev;
     });
-
-    channel.on("presence", { event: "sync" }, () => {
-      const state = channel.presenceState();
-      const updatedMap: Record<string, { online: boolean; lastSeen?: string }> = {};
-
-      Object.keys(state).forEach((usr) => {
-        const presences = state[usr] as any[];
-        if (presences && presences.length > 0) {
-          const p = presences[0];
-          if (!p.hideOnline) {
-            updatedMap[p.username?.toLowerCase()] = { online: true, lastSeen: p.online_at };
-          }
-        }
-      });
-      setPresenceMap(updatedMap);
-    });
-
-    channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
-      if (!payload || payload.receiver?.toLowerCase().trim() !== cleanUser) return;
-
-      if (payload.type === "offer") {
-        currentCallPartnerRef.current = payload.sender;
-        setIncomingCall(payload);
-      } else if (payload.type === "answer" && peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
-        setCallStatus("Ses Hattı Bağlandı 🟢");
-        while (iceCandidateQueue.current.length > 0) {
-          const candidate = iceCandidateQueue.current.shift();
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
-        }
-      } else if (payload.type === "candidate") {
-        const candidate = JSON.parse(payload.payload);
-        if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
-        } else {
-          iceCandidateQueue.current.push(candidate);
-        }
-      } else if (payload.type === "end") {
-        cleanupCall();
-      }
-    });
-
-    // ANLIK MESAJ YAKALAMA
-    channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
-      if (!payload) return;
-      const cur = activeChatRef.current;
-
-      if (payload.isGroup) {
-        const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
-        if (isMember && cur?.isGroup && cur.id === payload.group_id) {
-          setMessages((prev) => mergeMessageLists(prev, [payload]));
-        }
-      } else {
-        if (payload.receiver?.toLowerCase().trim() === cleanUser) {
-          addChatPartner(payload.sender);
-
-          channel.send({
-            type: "broadcast",
-            event: "delivery_receipt",
-            payload: { deliveredTo: cleanUser, sender: payload.sender?.toLowerCase().trim() }
-          });
-
-          if (cur && !cur.isGroup && cur.name?.toLowerCase().trim() === payload.sender?.toLowerCase().trim()) {
-            setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_read: true, is_delivered: true }]));
-            if (!disableReadReceiptsRef.current) {
-              channel.send({
-                type: "broadcast",
-                event: "read_receipt",
-                payload: { reader: cleanUser, partner: payload.sender?.toLowerCase().trim() }
-              });
-            }
-          } else {
-            setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_delivered: true }]));
-          }
-        }
-      }
-    });
-
-    // İLETİLDİ (ÇİFT GRİ TIK)
-    channel.on("broadcast", { event: "delivery_receipt" }, ({ payload }) => {
-      if (!payload || payload.sender !== cleanUser) return;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.sender?.toLowerCase().trim() === cleanUser && m.receiver?.toLowerCase().trim() === payload.deliveredTo
-            ? { ...m, is_delivered: true }
-            : m
-        )
-      );
-    });
-
-    // GÖRÜLDÜ (ÇİFT MAVİ TIK)
-    channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
-      if (!payload || payload.partner !== cleanUser) return;
-      const reader = payload.reader;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.sender?.toLowerCase().trim() === cleanUser && m.receiver?.toLowerCase().trim() === reader
-            ? { ...m, is_read: true, is_delivered: true }
-            : m
-        )
-      );
-    });
-
-    // YAZIYOR GÖSTERGESİ
-    channel.on("broadcast", { event: "typing_status" }, ({ payload }) => {
-      if (!payload || payload.receiver !== cleanUser) return;
-      setTypingMap((prev) => ({ ...prev, [payload.sender]: payload.isTyping }));
-    });
-
-    channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await channel.track({
-          username,
-          online_at: new Date().toISOString(),
-          hideOnline: isHideOnline
-        });
-      }
-    });
-
-    signalChannelRef.current = channel;
-  }, [addChatPartner, cleanupCall, mergeMessageLists]);
+  }
 
   useEffect(() => {
-    const rawUser = sessionStorage.getItem("rishyou_username");
-    if (!rawUser) {
+    const user = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_saved_username");
+    if (!user) {
       router.push("/");
     } else {
-      const user = rawUser.trim();
       setCurrentUser(user);
+      localStorage.setItem("rishyou_saved_username", user);
 
       loadUsers(user);
       loadGroups(user);
       loadWalletData(user);
       loadChatPartners(user);
 
-      const savedActive = sessionStorage.getItem("rishyou_active_chat");
-      if (savedActive) {
-        try { setActiveChat(JSON.parse(savedActive)); } catch {}
+      const savedPartners = localStorage.getItem(`rishyou_partners_${user}`);
+      if (savedPartners) {
+        try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
       }
 
-      initRealtimeHub(user, hideOnline);
+      const lastActive = localStorage.getItem(`rishyou_last_active_${user}`);
+      if (lastActive) {
+        try { setActiveChat(JSON.parse(lastActive)); } catch {}
+      }
+
+      const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
+      if (savedVault) setVaultNotes(JSON.parse(savedVault));
+
+      const savedPins = localStorage.getItem(`rishyou_pins_${user}`);
+      if (savedPins) setPinnedChats(JSON.parse(savedPins));
+
+      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user}`);
+      if (savedTimers) {
+        try { setChatTimers(JSON.parse(savedTimers)); } catch {}
+      }
+
+      let userHideOnline = false;
+      const savedSettings = localStorage.getItem(`rishyou_settings_${user}`);
+      if (savedSettings) {
+        try {
+          const parsed = JSON.parse(savedSettings);
+          if (parsed.hideOnline !== undefined) {
+            setHideOnline(parsed.hideOnline);
+            userHideOnline = parsed.hideOnline;
+          }
+          if (parsed.disableReadReceipts !== undefined) setDisableReadReceipts(parsed.disableReadReceipts);
+          if (parsed.screenshotProtection !== undefined) setScreenshotProtection(parsed.screenshotProtection);
+          if (parsed.soundEnabled !== undefined) setSoundEnabled(parsed.soundEnabled);
+          if (parsed.appPin !== undefined) setAppPin(parsed.appPin);
+          if (parsed.lang !== undefined) setLang(parsed.lang);
+        } catch {}
+      }
+
+      initRealtimeHub(user, userHideOnline);
     }
 
     const tpsInterval = setInterval(() => {
@@ -522,37 +255,37 @@ export default function ChatPage() {
       clearInterval(tpsInterval);
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
-  }, [initRealtimeHub, loadChatPartners, router, hideOnline]);
+  }, [router]);
 
   function setAutoDeleteForCurrentChat(hours: number) {
     if (!currentUser || !activeChat) return;
-    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name.toLowerCase();
-    setChatTimers((prev) => ({ ...prev, [chatKey]: hours }));
+    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name;
+    const updated = { ...chatTimers, [chatKey]: hours };
+    setChatTimers(updated);
+    localStorage.setItem(`rishyou_chat_timers_${currentUser}`, JSON.stringify(updated));
     setChatTimerModalOpen(false);
   }
 
-  function handleTextChange(val: string) {
-    setText(val);
-    if (!currentUser || !activeChat || activeChat.isGroup) return;
+  function saveUserSettings(updated: any) {
+    if (!currentUser) return;
+    const settings = {
+      hideOnline,
+      disableReadReceipts,
+      screenshotProtection,
+      soundEnabled,
+      appPin,
+      lang,
+      ...updated
+    };
+    localStorage.setItem(`rishyou_settings_${currentUser}`, JSON.stringify(settings));
 
-    if (signalChannelRef.current) {
-      signalChannelRef.current.send({
-        type: "broadcast",
-        event: "typing_status",
-        payload: { sender: currentUser.toLowerCase().trim(), receiver: activeChat.name.toLowerCase().trim(), isTyping: true }
+    if (updated.hideOnline !== undefined && signalChannelRef.current) {
+      signalChannelRef.current.track({
+        username: currentUser,
+        online_at: new Date().toISOString(),
+        hideOnline: updated.hideOnline
       });
     }
-
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      if (signalChannelRef.current && currentUser && activeChat) {
-        signalChannelRef.current.send({
-          type: "broadcast",
-          event: "typing_status",
-          payload: { sender: currentUser.toLowerCase().trim(), receiver: activeChat.name.toLowerCase().trim(), isTyping: false }
-        });
-      }
-    }, 2000);
   }
 
   useEffect(() => {
@@ -593,62 +326,221 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!currentUser || !activeChat) return;
+
     if (activeChat.isGroup) {
       loadGroupMessages(activeChat.id);
     } else {
       loadDirectMessages(currentUser, activeChat.name);
-      sendReadReceipt(activeChat.name);
     }
-  }, [currentUser, activeChat, loadDirectMessages, loadGroupMessages, sendReadReceipt]);
+  }, [currentUser, activeChat]);
 
-  useEffect(() => { 
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
-  }, [messages]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   function togglePin(id: string, e: React.MouseEvent) {
     e.stopPropagation();
-    setPinnedChats(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+    setPinnedChats(prev => {
+      const updated = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+      localStorage.setItem(`rishyou_pins_${currentUser}`, JSON.stringify(updated));
+      return updated;
+    });
   }
 
   async function loadUsers(current: string) { 
-    const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
-    if (data) setUsers(data); 
+    try {
+      const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
+      if (data) setUsers(data); 
+    } catch {}
+  }
+
+  async function loadChatPartners(current: string) {
+    try {
+      const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.eq.${current},receiver.eq.${current}`);
+      if (data) {
+        const partners = new Set<string>(activeChatPartners);
+        data.forEach((m) => { 
+          if (m.sender !== current) partners.add(m.sender); 
+          if (m.receiver !== current) partners.add(m.receiver); 
+        });
+        const arr = Array.from(partners);
+        setActiveChatPartners(arr);
+        localStorage.setItem(`rishyou_partners_${current}`, JSON.stringify(arr));
+      }
+    } catch {}
   }
 
   async function loadGroups(username: string) {
     try {
-      const { data, error } = await supabase.from("groups").select("*").order("created_at", { ascending: false });
-      if (!error && data) {
+      const { data } = await supabase.from("groups").select("*");
+      if (data) {
         const myGroups = data.filter((g: any) => {
-          let membersList: string[] = [];
-          if (Array.isArray(g.members)) {
-            membersList = g.members;
-          } else if (typeof g.members === "string") {
-            try { membersList = JSON.parse(g.members); } catch { membersList = [g.members]; }
-          }
-          const cleanMembers = membersList.map((m: any) => String(m).toLowerCase().trim());
-          const cleanUser = username.toLowerCase().trim();
-          const cleanCreator = String(g.created_by || "").toLowerCase().trim();
-          return cleanCreator === cleanUser || cleanMembers.includes(cleanUser);
+          const membersList = Array.isArray(g.members) ? g.members : [];
+          return g.created_by === username || membersList.includes(username);
         });
         setGroups(myGroups);
       }
+    } catch {}
+  }
+
+  // 400 HATASI ALMAYAN GÜVENLİ VE HIZLI MESAJ YÜKLEME
+  async function loadDirectMessages(u1: string, u2: string) { 
+    const localMsgs = getMessagesFromStorage(u1, u2, false);
+    setMessages(localMsgs);
+
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .or(`sender.eq.${u1},receiver.eq.${u1}`)
+        .order("created_at", { ascending: true }); 
+
+      if (!error && data) {
+        const filtered = data.filter(
+          (m: any) => (m.sender === u1 && m.receiver === u2) || (m.sender === u2 && m.receiver === u1)
+        );
+        
+        const mergedMap = new Map();
+        [...localMsgs, ...filtered].forEach((m) => {
+          const key = `${m.sender}_${m.created_at}_${m.content}`;
+          mergedMap.set(key, m);
+          saveMessageToStorage(u1, u2, false, m);
+        });
+        setMessages(Array.from(mergedMap.values()));
+      }
     } catch (e) {
-      console.error("Grup yükleme hatası:", e);
+      console.error("Supabase sync:", e);
     }
   }
 
-  async function loadWalletData(username: string) {
-    const { data } = await supabase.from("users").select("wallet_address").ilike("username", username).single();
-    if (data && data.wallet_address) {
-      setWalletAddress(data.wallet_address);
-      try {
-        const conn = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
-        const pub = new PublicKey(data.wallet_address);
-        const bal = await conn.getBalance(pub);
-        setSolBalance(bal / LAMPORTS_PER_SOL);
-      } catch { setSolBalance(0); }
+  async function loadGroupMessages(groupId: string) { 
+    const isMember = groupsRef.current.some((g) => g.id === groupId);
+    if (!isMember) {
+      setMessages([]);
+      return;
     }
+
+    const localMsgs = getMessagesFromStorage(currentUser || "", groupId, true);
+    setMessages(localMsgs);
+
+    try {
+      const { data, error } = await supabase
+        .from("group_messages")
+        .select("*")
+        .eq("group_id", groupId)
+        .order("created_at", { ascending: true }); 
+      
+      if (!error && data) {
+        const mergedMap = new Map();
+        [...localMsgs, ...data].forEach((m) => {
+          const key = `${m.sender}_${m.created_at}_${m.content}`;
+          mergedMap.set(key, m);
+          if (currentUser) saveMessageToStorage(currentUser, groupId, true, m);
+        });
+        setMessages(Array.from(mergedMap.values()));
+      }
+    } catch (e) {
+      console.error("Grup sync:", e);
+    }
+  }
+
+  // 403 HATASI VERMEYEN GÜVENLİ SOLANA BAKİYE SORGULAYICI
+  async function loadWalletData(username: string) {
+    try {
+      const { data } = await supabase.from("users").select("wallet_address").eq("username", username).single();
+      if (data && data.wallet_address) {
+        setWalletAddress(data.wallet_address);
+        try {
+          const conn = new Connection(SOLANA_RPC, "confirmed");
+          const pub = new PublicKey(data.wallet_address);
+          const bal = await conn.getBalance(pub);
+          setSolBalance(bal / LAMPORTS_PER_SOL);
+        } catch {
+          setSolBalance(0);
+        }
+      }
+    } catch {}
+  }
+
+  function initRealtimeHub(username: string, isHideOnline: boolean) {
+    const channel = supabase.channel(`rishyou_realtime_hub`, {
+      config: { 
+        broadcast: { self: false },
+        presence: { key: username }
+      }
+    });
+
+    channel.on("presence", { event: "sync" }, () => {
+      const state = channel.presenceState();
+      const updatedMap: Record<string, { online: boolean; lastSeen?: string }> = {};
+
+      Object.keys(state).forEach((usr) => {
+        const presences = state[usr] as any[];
+        if (presences && presences.length > 0) {
+          const p = presences[0];
+          if (!p.hideOnline) {
+            updatedMap[p.username] = { online: true, lastSeen: p.online_at };
+          }
+        }
+      });
+      setPresenceMap(updatedMap);
+    });
+
+    channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
+      if (!payload || payload.receiver !== username) return;
+
+      if (payload.type === "offer") {
+        currentCallPartnerRef.current = payload.sender;
+        setIncomingCall(payload);
+      } else if (payload.type === "answer" && peerConnectionRef.current) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
+        setCallStatus("Ses Hattı Bağlandı 🟢");
+        while (iceCandidateQueue.current.length > 0) {
+          const candidate = iceCandidateQueue.current.shift();
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
+        }
+      } else if (payload.type === "candidate") {
+        const candidate = JSON.parse(payload.payload);
+        if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+        } else {
+          iceCandidateQueue.current.push(candidate);
+        }
+      } else if (payload.type === "end") {
+        cleanupCall();
+      }
+    });
+
+    channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
+      if (!payload) return;
+      const cur = activeChatRef.current;
+
+      if (payload.isGroup) {
+        saveMessageToStorage(username, payload.group_id, true, payload);
+        const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
+        if (isMember && cur?.isGroup && cur.id === payload.group_id) {
+          setMessages((prev) => [...prev, payload]);
+        }
+      } else {
+        if (payload.receiver === username) {
+          saveMessageToStorage(username, payload.sender, false, payload);
+          addChatPartner(payload.sender);
+          if (cur && !cur.isGroup && cur.name === payload.sender) {
+            setMessages((prev) => [...prev, payload]);
+          }
+        }
+      }
+    });
+
+    channel.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        await channel.track({
+          username,
+          online_at: new Date().toISOString(),
+          hideOnline: isHideOnline
+        });
+      }
+    });
+
+    signalChannelRef.current = channel;
   }
 
   function sendSignal(receiver: string, type: string, payload: string) {
@@ -668,8 +560,6 @@ export default function ChatPage() {
     if (!content) return;
     if (!isAudio) { setText(""); setShowEmojiPicker(false); }
 
-    const isPartnerOnline = !activeChat.isGroup && presenceMap[activeChat.name?.toLowerCase()]?.online;
-
     const newMsg = {
       sender: currentUser,
       receiver: activeChat.isGroup ? null : activeChat.name,
@@ -677,12 +567,13 @@ export default function ChatPage() {
       content: content,
       message_type: isAudio ? "audio" : "text",
       created_at: new Date().toISOString(),
-      isGroup: activeChat.isGroup,
-      is_delivered: isPartnerOnline || false,
-      is_read: false
+      isGroup: activeChat.isGroup
     };
 
-    setMessages((prev) => mergeMessageLists(prev, [newMsg]));
+    setMessages((prev) => [...prev, newMsg]);
+
+    const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
+    saveMessageToStorage(currentUser, targetId, activeChat.isGroup, newMsg);
 
     if (!activeChat.isGroup) {
       addChatPartner(activeChat.name);
@@ -711,13 +602,11 @@ export default function ChatPage() {
           receiver: activeChat.name,
           content: content,
           message_type: isAudio ? "audio" : "text",
-          created_at: newMsg.created_at,
-          is_delivered: newMsg.is_delivered,
-          is_read: false
+          created_at: newMsg.created_at
         }]);
       }
     } catch (e) {
-      console.error("Supabase insert log:", e);
+      console.error("Supabase insert:", e);
     }
   }
 
@@ -752,7 +641,7 @@ export default function ChatPage() {
       mediaRecorder.start();
       setIsRecordingAudio(true);
     } catch { 
-      alert("Mikrofon izni verilmedi veya cihaz desteklemiyor!"); 
+      alert("Mikrofon izni verilmedi!"); 
     }
   }
 
@@ -926,6 +815,34 @@ export default function ChatPage() {
     }
   }
 
+  function cleanupCall() {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => {
+        t.stop();
+        t.enabled = false;
+      });
+      localStreamRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    iceCandidateQueue.current = [];
+    setLocalStreamState(null);
+    setCallModalOpen(false);
+    setIncomingCall(null);
+    setCallStatus("");
+    currentCallPartnerRef.current = null;
+    setIsMuted(false);
+    setIsSpeakerOff(false);
+    setCameraOff(false);
+
+    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
+    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
+    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
+    if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
+  }
+
   function endCall(sendEndSignal = true) {
     const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
     if (sendEndSignal && target && currentUser) {
@@ -936,7 +853,8 @@ export default function ChatPage() {
 
   function handleLogout() {
     sessionStorage.removeItem("rishyou_username");
-    sessionStorage.removeItem("rishyou_active_chat");
+    localStorage.removeItem("rishyou_saved_username");
+    if (currentUser) localStorage.removeItem(`rishyou_last_active_${currentUser}`);
     router.push("/");
   }
 
@@ -949,68 +867,57 @@ export default function ChatPage() {
 
   function saveVaultNote() {
     if (!newVaultNote.trim() || !currentUser) return;
-    setVaultNotes((prev) => [newVaultNote.trim(), ...prev]);
+    const updated = [newVaultNote.trim(), ...vaultNotes];
+    setVaultNotes(updated);
+    localStorage.setItem(`rishyou_vault_${currentUser}`, JSON.stringify(updated));
     setNewVaultNote("");
   }
 
-  const visibleUsers = useMemo(() => {
-    return searchQuery.trim()
-      ? users.filter((u) => u.username?.toLowerCase().includes(searchQuery.toLowerCase()))
-      : users.filter((u) => activeChatPartners.some((p) => p.toLowerCase().trim() === u.username?.toLowerCase().trim()));
-  }, [searchQuery, users, activeChatPartners]);
+  const visibleUsers = searchQuery.trim()
+    ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
+    : users.filter((u) => activeChatPartners.includes(u.username));
 
-  const filteredGroups = useMemo(() => {
-    return groups.filter((g) => g.name?.toLowerCase().includes(searchQuery.toLowerCase()));
-  }, [groups, searchQuery]);
+  const filteredGroups = groups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  const sortedUsers = useMemo(() => {
-    return [...visibleUsers].sort((a, b) => {
-      const aPin = pinnedChats.includes(a.username);
-      const bPin = pinnedChats.includes(b.username);
-      return aPin === bPin ? 0 : aPin ? -1 : 1;
-    });
-  }, [pinnedChats, visibleUsers]);
+  const sortedUsers = [...visibleUsers].sort((a, b) => {
+    const aPin = pinnedChats.includes(a.username);
+    const bPin = pinnedChats.includes(b.username);
+    return aPin === bPin ? 0 : aPin ? -1 : 1;
+  });
 
-  const sortedGroups = useMemo(() => {
-    return [...filteredGroups].sort((a, b) => {
-      const aPin = pinnedChats.includes(a.id);
-      const bPin = pinnedChats.includes(b.id);
-      return aPin === bPin ? 0 : aPin ? -1 : 1;
-    });
-  }, [filteredGroups, pinnedChats]);
+  const sortedGroups = [...filteredGroups].sort((a, b) => {
+    const aPin = pinnedChats.includes(a.id);
+    const bPin = pinnedChats.includes(b.id);
+    return aPin === bPin ? 0 : aPin ? -1 : 1;
+  });
 
-  const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name?.toLowerCase()) : "";
+  const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name) : "";
   const currentChatTimerHours = currentChatKey ? (chatTimers[currentChatKey] || 0) : 0;
 
-  const displayMessages = useMemo(() => {
-    return messages.filter((m) => {
-      if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
-      const msgTime = new Date(m.created_at).getTime();
-      const now = Date.now();
-      return (now - msgTime) < currentChatTimerHours * 60 * 60 * 1000;
-    });
-  }, [currentChatTimerHours, messages]);
+  const displayMessages = messages.filter((m) => {
+    if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
+    const msgTime = new Date(m.created_at).getTime();
+    const now = Date.now();
+    return (now - msgTime) < currentChatTimerHours * 60 * 60 * 1000;
+  });
 
   function getUserOnlineStatus(username: string) {
-    const isTyping = typingMap[username?.toLowerCase()];
-    if (isTyping) {
-      return { text: "yazıyor...", isOnline: true, isTyping: true };
-    }
-    const info = presenceMap[username?.toLowerCase()];
+    const info = presenceMap[username];
     if (info && info.online) {
-      return { text: "Çevrim İçi 🟢", isOnline: true, isTyping: false };
+      return { text: "Çevrim İçi 🟢", isOnline: true };
     }
-    return { text: "Çevrim Dışı", isOnline: false, isTyping: false };
+    return { text: "Çevrim Dışı", isOnline: false };
   }
 
   return (
-    <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans select-none">
+    <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
       
+      {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
 
-      {/* SOL SOHBET LİSTESİ */}
+      {/* SOL KENAR ÇUBUĞU (INBOX / SOHBET LİSTESİ) */}
       <aside className={`flex flex-col w-full md:w-80 lg:w-96 bg-[#17212b] border-r border-[#242f3d] flex-shrink-0 relative ${activeChat ? "hidden md:flex" : "flex"}`}>
         
         <div className="flex items-center justify-between p-3 border-b border-[#242f3d] bg-[#17212b] z-20 gap-1.5">
@@ -1122,7 +1029,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                   <p className="text-[10px] text-gray-400 truncate">
-                    {g.created_by?.toLowerCase() === currentUser?.toLowerCase() ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}
+                    {g.created_by === currentUser ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}
                   </p>
                 </div>
               </div>
@@ -1130,10 +1037,10 @@ export default function ChatPage() {
           })}
 
           {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.map((u) => {
-            const isSelected = !activeChat?.isGroup && activeChat?.name?.toLowerCase().trim() === u.username?.toLowerCase().trim();
+            const isSelected = !activeChat?.isGroup && activeChat?.name === u.username;
             const isPinned = pinnedChats.includes(u.username);
             const statusInfo = getUserOnlineStatus(u.username);
-            const hasTimer = (chatTimers[u.username?.toLowerCase()] || 0) > 0;
+            const hasTimer = (chatTimers[u.username] || 0) > 0;
 
             return (
               <div key={`usr_${u.username}`} onClick={() => selectChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
@@ -1151,13 +1058,13 @@ export default function ChatPage() {
                     <div className="flex items-center gap-1.5">
                       {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
                       <button onClick={(e) => togglePin(u.username, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
-                      <span className={`text-[9px] ${statusInfo.isTyping ? "text-[#14F195] font-bold animate-pulse" : statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
+                      <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
                         {statusInfo.text}
                       </span>
                     </div>
                   </div>
                   <p className="text-[10px] text-gray-400 truncate">
-                    {statusInfo.isTyping ? "yazıyor..." : u.wallet_address ? `${u.wallet_address.slice(0, 4)}...${u.wallet_address.slice(-4)}` : "Solana Cüzdanı"}
+                    {u.wallet_address ? `${u.wallet_address.slice(0, 4)}...${u.wallet_address.slice(-4)}` : "Solana Cüzdanı"}
                   </p>
                 </div>
               </div>
@@ -1187,7 +1094,7 @@ export default function ChatPage() {
                 <div className="min-w-0">
                   <h2 className="text-xs font-bold text-white truncate leading-tight">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
                   <div className="flex items-center gap-1 truncate">
-                    <span className={`text-[9px] sm:text-[10px] truncate ${getUserOnlineStatus(activeChat.name).isTyping ? "text-[#14F195] font-bold animate-pulse" : "text-[#14F195]"}`}>
+                    <span className="text-[9px] sm:text-[10px] text-[#14F195] truncate">
                       {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
                     </span>
                     {currentChatTimerHours > 0 && (
@@ -1234,33 +1141,23 @@ export default function ChatPage() {
               </div>
 
               {displayMessages.map((m, idx) => {
-                const isMe = m.sender?.toLowerCase().trim() === currentUser?.toLowerCase().trim();
+                const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";
                 return (
                   <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto border border-gray-700/40"}`}>
+                    <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto"}`}>
                       {activeChat.isGroup && !isMe && (
                         <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
                       )}
                       {isAudio ? (
-                        <CompactAudioPlayer src={m.content} />
+                        <div className="py-0.5">
+                          <audio controls src={m.content} playsInline className="w-[190px] sm:w-[220px] h-8 rounded-lg accent-[#14F195]" />
+                        </div>
                       ) : (
                         <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>
                       )}
-                      <div className="flex items-center justify-end gap-1 text-[8.5px] sm:text-[9px] text-gray-300/70 mt-0.5">
-                        <span>{new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                        {/* 3 KADEMELİ TIK SİSTEMİ */}
-                        {isMe && !activeChat.isGroup && (
-                          <span className="text-[11px] leading-none select-none flex items-center">
-                            {m.is_read ? (
-                              <span className="text-[#38bdf8] font-bold drop-shadow-[0_0_4px_#38bdf8]" title="Görüldü">✓✓</span>
-                            ) : m.is_delivered ? (
-                              <span className="text-gray-300 font-semibold" title="İletildi">✓✓</span>
-                            ) : (
-                              <span className="text-gray-400" title="Gönderildi">✓</span>
-                            )}
-                          </span>
-                        )}
+                      <div className="text-[8.5px] sm:text-[9px] text-gray-300/70 text-right mt-0.5">
+                        {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
                   </div>
@@ -1286,13 +1183,7 @@ export default function ChatPage() {
                 <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-2xl text-base sm:text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
                   😊
                 </button>
-                <input 
-                  type="text" 
-                  value={text} 
-                  onChange={(e) => handleTextChange(e.target.value)} 
-                  placeholder="Mesajınızı yazın..." 
-                  className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3 py-2 sm:py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" 
-                />
+                <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3 py-2 sm:py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" />
                 <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2 sm:p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">
                   {isRecordingAudio ? "⏹️" : "🎙️"}
                 </button>
@@ -1367,22 +1258,22 @@ export default function ChatPage() {
               <div className="space-y-2">
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">👤 Çevrim İçi Durumunu Gizle</span>
-                  <input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); saveUserSettings({ hideOnline: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span>
-                  <input type="checkbox" checked={disableReadReceipts} onChange={(e) => { setDisableReadReceipts(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={disableReadReceipts} onChange={(e) => { setDisableReadReceipts(e.target.checked); saveUserSettings({ disableReadReceipts: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">🛡️ Ekran Görüntüsü Koruması</span>
-                  <input type="checkbox" checked={screenshotProtection} onChange={(e) => { setScreenshotProtection(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={screenshotProtection} onChange={(e) => { setScreenshotProtection(e.target.checked); saveUserSettings({ screenshotProtection: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
               </div>
             )}
             {settingsTab === "lang" && (
               <div className="space-y-1.5">
                 {[{ code: "tr", label: "🇹🇷 Türkçe" }, { code: "en", label: "🇬🇧 English" }, { code: "ru", label: "🇷🇺 Русский" }].map((l) => (
-                  <button key={l.code} onClick={() => { setLang(l.code); alert(`Dil ${l.label} olarak ayarlandı.`); }} className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer ${lang === l.code ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}>{l.label}</button>
+                  <button key={l.code} onClick={() => { setLang(l.code); saveUserSettings({ lang: l.code }); alert(`Dil ${l.label} olarak ayarlandı.`); }} className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer ${lang === l.code ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}>{l.label}</button>
                 ))}
               </div>
             )}
@@ -1390,7 +1281,7 @@ export default function ChatPage() {
               <div className="space-y-2">
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span>Mesaj Bildirim ve Arama Sesleri</span>
-                  <input type="checkbox" checked={soundEnabled} onChange={(e) => { setSoundEnabled(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={soundEnabled} onChange={(e) => { setSoundEnabled(e.target.checked); saveUserSettings({ soundEnabled: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
               </div>
             )}
@@ -1407,7 +1298,7 @@ export default function ChatPage() {
             {settingsTab === "pin" && (
               <div className="space-y-2 text-xs">
                 <p className="text-gray-400">Uygulama açılışı için hesabınıza özel 4 haneli PIN belirleyin:</p>
-                <input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
+                <input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); saveUserSettings({ appPin: e.target.value }); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
               </div>
             )}
             <button onClick={() => setSettingsModalOpen(false)} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl shadow-lg cursor-pointer">Kaydet ve Kapat</button>
