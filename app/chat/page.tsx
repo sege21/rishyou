@@ -18,14 +18,6 @@ const ICE_SERVERS: RTCConfiguration = {
 
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
 
-const HIGH_FIDELITY_AUDIO: MediaTrackConstraints = {
-  echoCancellation: true,
-  noiseSuppression: false,
-  autoGainControl: false,
-  sampleRate: 48000,
-  channelCount: 1
-};
-
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -121,7 +113,7 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
-  // ARAMA VE WEBRTC MOTORU
+  // ARAMA VE WEBRTC MOTORU STATE'LERİ
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
@@ -145,6 +137,7 @@ export default function ChatPage() {
   const iceCandidatesQueue = useRef<any[]>([]);
   const signalChannelRef = useRef<any>(null);
   const callTimerRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const dialtoneRef = useRef<HTMLAudioElement | null>(null);
@@ -169,6 +162,22 @@ export default function ChatPage() {
       if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
   }, []);
+
+  // Tarayıcı Ses Kilidini Kullanıcı Dokunuşunda Açma
+  function unlockAudioHardware() {
+    try {
+      if (!audioContextRef.current) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) audioContextRef.current = new AudioCtx();
+      }
+      if (audioContextRef.current && audioContextRef.current.state === "suspended") {
+        audioContextRef.current.resume();
+      }
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
+    } catch {}
+  }
 
   function triggerPushNotification(title: string, body: string, isCall: boolean = false) {
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
@@ -201,7 +210,9 @@ export default function ChatPage() {
   }
 
   function getStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
-    return isGroup ? `rishyou_history_grp_${partnerOrGroupId}` : `rishyou_history_dm_${[user, partnerOrGroupId].sort().join("_")}`;
+    if (isGroup) return `rishyou_history_grp_${partnerOrGroupId}`;
+    const pair = [user, partnerOrGroupId].sort().join("_");
+    return `rishyou_history_dm_${pair}`;
   }
 
   function saveMessageLocal(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
@@ -345,7 +356,7 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // Arka Plandaki Aktif Çağrıları / Cevapsız Aramaları Denetle
+  // Arka Plandaki Aktif Çağrıları / Sinyalleri Denetle
   async function checkPendingCallSignals(username: string) {
     try {
       const { data } = await supabase
@@ -521,7 +532,7 @@ export default function ChatPage() {
   }
 
   // ====================================================
-  // WEBRTC & ÇİFT KANALLI ÇAĞRI MOTORU (0MS + GÜVENLİ DB)
+  // WEBRTC VE SES İLETİMİ (AUTOPLAY KİLİTSİZ & HATA GEÇİRMEZ)
   // ====================================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, { config: { broadcast: { self: false }, presence: { key: username } } });
@@ -538,7 +549,6 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // 0ms Anlık Sinyaller
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
@@ -558,7 +568,9 @@ export default function ChatPage() {
             const candidate = iceCandidatesQueue.current.shift();
             try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
           }
-        } catch {}
+        } catch (e) {
+          console.error("Answer hatası:", e);
+        }
       } else if (payload.type === "candidate") {
         const candidate = JSON.parse(payload.payload);
         if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
@@ -608,7 +620,6 @@ export default function ChatPage() {
   }
 
   function sendSignal(receiver: string, type: string, payload: string, extra: any = {}) {
-    // 1. Hızlı Kanal (0ms WebSocket)
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -617,7 +628,6 @@ export default function ChatPage() {
       });
     }
 
-    // 2. Güvenli Kalıcı Kanal (Veritabanı Sinyalleşmesi)
     if (type === "offer" || type === "end") {
       try {
         supabase.from("call_signals").insert([{
@@ -640,6 +650,10 @@ export default function ChatPage() {
     peerConnectionRef.current = pc;
     iceCandidatesQueue.current = [];
 
+    // Çift Yönlü Ses ve Video Transceiver'larını Zorunlu Kıl
+    pc.addTransceiver("audio", { direction: "sendrecv" });
+    pc.addTransceiver("video", { direction: "sendrecv" });
+
     pc.onicecandidate = (event) => {
       if (event.candidate && targetUser) {
         sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
@@ -648,11 +662,27 @@ export default function ChatPage() {
 
     pc.ontrack = (event) => {
       const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      
+      // 1. HTML5 Audio Elementi Bağlantısı
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
         remoteAudioRef.current.muted = false;
         remoteAudioRef.current.play().catch(() => {});
       }
+      
+      // 2. Web Audio API Destination Bağlantısı (Autoplay Engelini Kırar)
+      try {
+        if (!audioContextRef.current) {
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioCtx) audioContextRef.current = new AudioCtx();
+        }
+        if (audioContextRef.current) {
+          if (audioContextRef.current.state === "suspended") audioContextRef.current.resume();
+          const source = audioContextRef.current.createMediaStreamSource(stream);
+          source.connect(audioContextRef.current.destination);
+        }
+      } catch {}
+
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream;
         remoteVideoRef.current.play().catch(() => {});
@@ -675,6 +705,8 @@ export default function ChatPage() {
 
   async function startCall(video: boolean = false) {
     if (!activeChat || activeChat.isGroup || !currentUser) return;
+    unlockAudioHardware();
+
     const target = activeChat.name;
     const callId = `call_${Date.now()}`;
     currentCallPartnerRef.current = target;
@@ -691,12 +723,12 @@ export default function ChatPage() {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: HIGH_FIDELITY_AUDIO,
+        audio: true,
         video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
       });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: HIGH_FIDELITY_AUDIO, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         setIsVideoCall(false);
       } catch {
         return setCallStatus("Mikrofon izni verilmedi!");
@@ -720,6 +752,8 @@ export default function ChatPage() {
 
   async function acceptCall() {
     if (!incomingCall || !currentUser) return;
+    unlockAudioHardware();
+
     const caller = incomingCall.sender;
     currentCallPartnerRef.current = caller;
 
@@ -740,12 +774,12 @@ export default function ChatPage() {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: HIGH_FIDELITY_AUDIO,
+        audio: true,
         video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
       });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: HIGH_FIDELITY_AUDIO, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         setIsVideoCall(false);
       } catch {
         return setCallStatus("Mikrofon hatası!");
@@ -856,7 +890,7 @@ export default function ChatPage() {
 
   async function startRecordingAudio() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: HIGH_FIDELITY_AUDIO });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
       let options = { mimeType: "audio/webm" };
       if (typeof MediaRecorder !== "undefined") {
@@ -1193,7 +1227,7 @@ export default function ChatPage() {
               <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto">
                 <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-2xl text-base sm:text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">😊</button>
                 <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3 py-2 sm:py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" />
-                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2 sm:p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">{isRecordingAudio ? "⏹️" : "🎙️"}  </button>
+                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2 sm:p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">{isRecordingAudio ? "⏹️" : "🎙️"}</button>
                 <button type="submit" disabled={!text.trim()} className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">Gönder</button>
               </form>
             </div>
@@ -1223,7 +1257,7 @@ export default function ChatPage() {
             </div>
             <div className="flex justify-center flex-wrap gap-2 pt-2">
               <button onClick={() => setIsMuted(!isMuted)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isMuted ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{isMuted ? "🔇 Mik Aç" : "🎙️ Mik Kapat"}</button>
-              <button onClick={() => setIsSpeakerOff(!isSpeakerOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isSpeakerOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{isSpeakerOff ? "🔇 Hoparlör Aç" : "🔊 Hoparlör Kapat"}  </button>
+              <button onClick={() => setIsSpeakerOff(!isSpeakerOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isSpeakerOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{isSpeakerOff ? "🔇 Hoparlör Aç" : "🔊 Hoparlör Kapat"}</button>
               {isVideoCall && <button onClick={() => setCameraOff(!cameraOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${cameraOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{cameraOff ? "📹 Kamera Aç" : "🚫 Kamera Kapat"}</button>}
               <button onClick={() => endCall(true)} className="p-3 px-5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-black active:scale-95 cursor-pointer shadow-lg shadow-red-500/30">🔴 Sonlandır</button>
             </div>
