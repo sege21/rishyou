@@ -10,20 +10,14 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun3.l.google.com:19302" },
-    { urls: "stun:global.stun.twilio.com:3478" }
-  ]
+    { urls: "stun:stun4.l.google.com:19302" },
+    { urls: "stun:openrelay.metered.ca:80" },
+    { urls: "stun:openrelay.metered.ca:443" }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
-
-// 5. SANİYEDE SES FREKANS BOZULMASINI ENGELLEYEN SAF SES AYARLARI
-const PURE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
-  echoCancellation: true,
-  noiseSuppression: false, // 5. saniyede frekans bozulmasını ve robotikleşmeyi önler
-  autoGainControl: false,  // Kazanç filtresinin patlamasını ve dalgalanmasını önler
-  channelCount: 1,
-  sampleRate: 48000
-};
 
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
   return (
@@ -391,7 +385,6 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // Çevrim Dışıyken Gelen Aktif Çağrıları / Cevapsız Aramaları Uyandır
   async function checkOfflineIncomingCalls(username: string) {
     try {
       const { data } = await supabase
@@ -407,7 +400,7 @@ export default function ChatPage() {
         const callTime = new Date(call.created_at).getTime();
         const now = Date.now();
 
-        if (now - callTime < 40000) {
+        if (now - callTime < 45000) {
           currentCallPartnerRef.current = call.caller;
           setCurrentCallLogId(call.id);
           setIsVideoCall(call.call_type === "video");
@@ -451,10 +444,9 @@ export default function ChatPage() {
       setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
     }, 3000);
 
-    // Düzenli aralıklarla gelen cevapsız çağrı veya bekleyen aramaları tara
     const pollInterval = setInterval(() => {
       if (user) checkOfflineIncomingCalls(user);
-    }, 8000);
+    }, 6000);
 
     return () => {
       clearInterval(tpsInterval);
@@ -624,7 +616,7 @@ export default function ChatPage() {
   }
 
   // ==========================================
-  // GELİŞMİŞ WEBRTC VE SİNYALLEŞME MOTORU
+  // SAĞLAM WEBRTC VE SİNYALLEŞME MOTORU
   // ==========================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
@@ -650,7 +642,7 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // SİNYAL ALMA VE İŞLEME
+    // SİNYAL DİNLEYİCİSİ
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
@@ -661,7 +653,7 @@ export default function ChatPage() {
       } else if (payload.type === "answer" && peerConnectionRef.current) {
         try {
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
-          setCallStatus("Bağlandı 🟢");
+          setCallStatus("Ses Hattı Bağlandı 🟢");
           setIsCallActive(true);
 
           while (iceCandidatesQueue.current.length > 0) {
@@ -683,7 +675,7 @@ export default function ChatPage() {
       }
     });
 
-    // MESAJ ALMA VE BİLDİRİM
+    // MESAJ DİNLEYİCİSİ
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -775,17 +767,19 @@ export default function ChatPage() {
         remoteVideoRef.current.srcObject = stream;
         remoteVideoRef.current.play().catch(() => {});
       }
-      setCallStatus("Bağlandı 🟢");
+      setCallStatus("Ses Hattı Bağlandı 🟢");
       setIsCallActive(true);
     };
 
+    // KOPMAYI ENGELLEYEN BAĞLANTI DURUM TAKİBİ (OTOMATİK ATMA KALDIRILDI)
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
-        setCallStatus("Bağlandı 🟢");
+        setCallStatus("Ses Hattı Bağlandı 🟢");
         setIsCallActive(true);
-      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-        setCallStatus("Bağlantı Koptu 🔴");
-        setTimeout(() => cleanupCall(), 1500);
+      } else if (pc.connectionState === "disconnected") {
+        setCallStatus("Bağlantı Yenileniyor 🟡");
+      } else if (pc.connectionState === "failed") {
+        setCallStatus("Bağlantı Hatası 🔴");
       }
     };
 
@@ -819,12 +813,12 @@ export default function ChatPage() {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: PURE_AUDIO_CONSTRAINTS,
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
       });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: PURE_AUDIO_CONSTRAINTS, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         setIsVideoCall(false);
       } catch {
         setCallStatus("Mikrofon izni verilmedi!");
@@ -869,12 +863,12 @@ export default function ChatPage() {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: PURE_AUDIO_CONSTRAINTS,
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
       });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: PURE_AUDIO_CONSTRAINTS, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         setIsVideoCall(false);
       } catch {
         setCallStatus("Mikrofon hatası!");
@@ -898,7 +892,7 @@ export default function ChatPage() {
       }
       
       setIncomingCall(null);
-      setCallStatus("Bağlandı 🟢");
+      setCallStatus("Ses Hattı Bağlandı 🟢");
       setIsCallActive(true);
 
       while (iceCandidatesQueue.current.length > 0) {
@@ -1021,7 +1015,7 @@ export default function ChatPage() {
   async function startRecordingAudio() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: PURE_AUDIO_CONSTRAINTS
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       });
       audioChunksRef.current = [];
 
