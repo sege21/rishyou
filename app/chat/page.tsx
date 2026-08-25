@@ -9,8 +9,6 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-    { urls: "stun:stun4.l.google.com:19302" },
     { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
@@ -90,6 +88,7 @@ export default function ChatPage() {
   const [lang, setLang] = useState("tr");
 
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
+  const [notificationsAllowed, setNotificationsAllowed] = useState(false);
 
   const [solPrice, setSolPrice] = useState<number>(96.40);
   const [solChange, setSolChange] = useState<string>("+1.40%");
@@ -118,6 +117,7 @@ export default function ChatPage() {
   const [callStatus, setCallStatus] = useState<string>("");
   const [callDuration, setCallDuration] = useState<number>(0);
   const [isCallActive, setIsCallActive] = useState<boolean>(false);
+  const [currentCallLogId, setCurrentCallLogId] = useState<number | null>(null);
   
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOff, setIsSpeakerOff] = useState(false);
@@ -152,6 +152,40 @@ export default function ChatPage() {
   useEffect(() => {
     groupsRef.current = groups;
   }, [groups]);
+
+  // Bildirim İzni ve Service Worker Kaydı
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "granted") {
+        setNotificationsAllowed(true);
+      } else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then((p) => {
+          setNotificationsAllowed(p === "granted");
+        });
+      }
+
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      }
+    }
+  }, []);
+
+  function triggerPushNotification(title: string, body: string) {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(title, {
+          body,
+          icon: "/favicon.ico",
+          badge: "/favicon.ico",
+          vibrate: [200, 100, 200]
+        } as any);
+      } catch {
+        if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ title, body });
+        }
+      }
+    }
+  }
 
   // Arama Süresi Sayacı
   useEffect(() => {
@@ -347,6 +381,36 @@ export default function ChatPage() {
     } catch {}
   }
 
+  // Çevrim Dışıyken Gelen Aktif Aramaları / Cevapsız Aramaları Kontrol Et
+  async function checkOfflineIncomingCalls(username: string) {
+    try {
+      const { data } = await supabase
+        .from("call_logs")
+        .select("*")
+        .eq("receiver", username)
+        .eq("status", "calling")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (data && data.length > 0) {
+        const call = data[0];
+        const callTime = new Date(call.created_at).getTime();
+        const now = Date.now();
+
+        // Arama son 35 saniye içindeyse gelen arama ekranını tetikle
+        if (now - callTime < 35000) {
+          currentCallPartnerRef.current = call.caller;
+          setCurrentCallLogId(call.id);
+          setIsVideoCall(call.call_type === "video");
+          setIncomingCall({ sender: call.caller, payload: "" });
+        } else {
+          // Süresi geçmişse cevapsız olarak işaretle
+          await supabase.from("call_logs").update({ status: "missed" }).eq("id", call.id);
+        }
+      }
+    } catch {}
+  }
+
   useEffect(() => {
     const user = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_username");
     if (!user) {
@@ -371,6 +435,7 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
       loadUserDataFromCloud(user);
+      checkOfflineIncomingCalls(user);
       initRealtimeHub(user, hideOnline);
     }
 
@@ -545,7 +610,7 @@ export default function ChatPage() {
   }
 
   // ==========================================
-  // GELİŞMİŞ WEBRTC VE SİNYALLEŞME MOTORU
+  // WEBRTC VE SİNYALLEŞME MOTORU
   // ==========================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
@@ -571,20 +636,20 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // GELEN ARAMA SİNYAL DİNLENMESİ
+    // GELEN SİNYALLER
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
       if (payload.type === "offer") {
         currentCallPartnerRef.current = payload.sender;
         setIncomingCall(payload);
+        triggerPushNotification("📞 Gelen Arama", `@${payload.sender} sizi arıyor...`);
       } else if (payload.type === "answer" && peerConnectionRef.current) {
         try {
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
           setCallStatus("Bağlandı 🟢");
           setIsCallActive(true);
 
-          // Biriken ICE adaylarını boşalt
           while (iceCandidatesQueue.current.length > 0) {
             const candidate = iceCandidatesQueue.current.shift();
             try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
@@ -604,6 +669,7 @@ export default function ChatPage() {
       }
     });
 
+    // GELEN MESAJLAR
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -613,6 +679,8 @@ export default function ChatPage() {
         const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
         if (isMember && cur?.isGroup && cur.id === payload.group_id) {
           setMessages((prev) => [...prev, payload]);
+        } else if (isMember) {
+          triggerPushNotification("👥 Yeni Grup Mesajı", `@${payload.sender}: ${payload.message_type === 'audio' ? '🎙️ Sesli Mesaj' : payload.content}`);
         }
       } else {
         if (payload.receiver === username) {
@@ -630,6 +698,8 @@ export default function ChatPage() {
                 payload: { reader: username, partner: payload.sender }
               });
             }
+          } else {
+            triggerPushNotification(`💬 @${payload.sender}`, payload.message_type === 'audio' ? '🎙️ Sesli Mesaj' : payload.content);
           }
         }
       }
@@ -721,6 +791,18 @@ export default function ChatPage() {
     setIsSpeakerOff(false);
     setCameraOff(false);
 
+    // Veritabanına Çağrı Kaydı Aç (Karşı taraf offline ise açtığı anda yakalar)
+    try {
+      const { data } = await supabase.from("call_logs").insert([{
+        caller: currentUser,
+        receiver: target,
+        call_type: video ? "video" : "audio",
+        status: "calling",
+        created_at: new Date().toISOString()
+      }]).select().single();
+      if (data) setCurrentCallLogId(data.id);
+    } catch {}
+
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -764,7 +846,11 @@ export default function ChatPage() {
     setIsSpeakerOff(false);
     setCameraOff(false);
 
-    const isVideo = incomingCall.payload?.includes("m=video") || false;
+    if (currentCallLogId) {
+      supabase.from("call_logs").update({ status: "answered" }).eq("id", currentCallLogId).then(() => {});
+    }
+
+    const isVideo = incomingCall.payload?.includes("m=video") || isVideoCall || false;
     setIsVideoCall(isVideo);
 
     let stream: MediaStream;
@@ -790,11 +876,13 @@ export default function ChatPage() {
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      if (incomingCall.payload) {
+        await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
 
-      sendSignal(caller, "answer", JSON.stringify(answer));
+        sendSignal(caller, "answer", JSON.stringify(answer));
+      }
       
       setIncomingCall(null);
       setCallStatus("Bağlandı 🟢");
@@ -831,6 +919,11 @@ export default function ChatPage() {
     setIsMuted(false);
     setIsSpeakerOff(false);
     setCameraOff(false);
+
+    if (currentCallLogId) {
+      supabase.from("call_logs").update({ status: isCallActive ? "ended" : "missed" }).eq("id", currentCallLogId).then(() => {});
+      setCurrentCallLogId(null);
+    }
 
     if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
     if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
@@ -1069,7 +1162,19 @@ export default function ChatPage() {
           </button>
 
           <div className="flex items-center gap-1 flex-shrink-0">
-            <button onClick={() => alert("Yeni bildiriminiz bulunmuyor.")} title="Bildirimler" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-amber-400 text-xs transition-all active:scale-90 cursor-pointer">🔔</button>
+            <button 
+              onClick={() => {
+                if (!notificationsAllowed) {
+                  Notification.requestPermission().then((p) => setNotificationsAllowed(p === "granted"));
+                } else {
+                  alert("Bildirimler aktif ✔");
+                }
+              }} 
+              title={notificationsAllowed ? "Bildirimler Açık" : "Bildirim İzni Ver"} 
+              className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${notificationsAllowed ? "bg-[#242f3d] text-[#14F195]" : "bg-amber-500/20 text-amber-400 animate-pulse"}`}
+            >
+              🔔
+            </button>
             <div className="px-2 py-0.5 rounded-xl bg-[#242f3d] border border-[#14F195]/40 text-[9px] font-bold text-[#14F195] flex flex-col items-center leading-tight"><span>{tpsCount}</span><span className="text-[7px] text-gray-400 font-normal">TPS</span></div>
             <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı Mesajlar" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-yellow-400 text-xs transition-all active:scale-90 cursor-pointer">⭐</button>
             <button onClick={() => setSettingsModalOpen(true)} title="Ayarlar & Gizlilik" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-300 text-xs transition-all active:scale-90 cursor-pointer">⚙️</button>
@@ -1625,7 +1730,6 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ÖZEL GRUP KURMA MODALI */}
       {createGroupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-[#17212b] border border-gray-700 rounded-3xl p-5 shadow-2xl space-y-3">
