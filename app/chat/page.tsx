@@ -200,7 +200,6 @@ export default function ChatPage() {
     disableReadReceiptsRef.current = disableReadReceipts;
   }, [disableReadReceipts]);
 
-  // AKILLI VE GÜVENLİ BİRLEŞTİRME (Kayıp ve ezilmeleri tamamen önler)
   const mergeMessageLists = useCallback((currentList: any[], incomingList: any[]) => {
     const map = new Map<string, any>();
     
@@ -260,7 +259,6 @@ export default function ChatPage() {
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
-    setMessages([]);
     if (chat && currentUser) {
       sessionStorage.setItem("rishyou_active_chat", JSON.stringify(chat));
       if (!chat.isGroup) {
@@ -282,7 +280,6 @@ export default function ChatPage() {
       const { data, error } = await supabase
         .from("messages")
         .select("*")
-        .or(`sender.ilike.${user1},receiver.ilike.${user1}`)
         .order("created_at", { ascending: true });
 
       if (!error && data) {
@@ -321,7 +318,6 @@ export default function ChatPage() {
       const { data } = await supabase
         .from("messages")
         .select("sender, receiver")
-        .or(`sender.ilike.${myName},receiver.ilike.${myName}`)
         .order("created_at", { ascending: false });
 
       if (data) {
@@ -369,7 +365,6 @@ export default function ChatPage() {
   const initRealtimeHub = useCallback((username: string, isHideOnline: boolean) => {
     const cleanUser = username.toLowerCase().trim();
     
-    // TÜM KULLANICILAR İÇİN ORTAK REALTIME KANALI
     const channel = supabase.channel("rishyou_global_realtime_hub", {
       config: {
         broadcast: { self: false },
@@ -622,15 +617,25 @@ export default function ChatPage() {
 
   async function loadGroups(username: string) {
     try {
-      const { data } = await supabase.from("groups").select("*");
-      if (data) {
+      const { data, error } = await supabase.from("groups").select("*").order("created_at", { ascending: false });
+      if (!error && data) {
         const myGroups = data.filter((g: any) => {
-          const membersList = Array.isArray(g.members) ? g.members.map((m: string) => m.toLowerCase()) : [];
-          return g.created_by?.toLowerCase() === username.toLowerCase() || membersList.includes(username.toLowerCase());
+          let membersList: string[] = [];
+          if (Array.isArray(g.members)) {
+            membersList = g.members;
+          } else if (typeof g.members === "string") {
+            try { membersList = JSON.parse(g.members); } catch { membersList = [g.members]; }
+          }
+          const cleanMembers = membersList.map((m: any) => String(m).toLowerCase().trim());
+          const cleanUser = username.toLowerCase().trim();
+          const cleanCreator = String(g.created_by || "").toLowerCase().trim();
+          return cleanCreator === cleanUser || cleanMembers.includes(cleanUser);
         });
         setGroups(myGroups);
       }
-    } catch {}
+    } catch (e) {
+      console.error("Grup yükleme hatası:", e);
+    }
   }
 
   async function loadWalletData(username: string) {
@@ -656,7 +661,6 @@ export default function ChatPage() {
     }
   }
 
-  // BULUTA VE EKRANA KALICI MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -1363,15 +1367,15 @@ export default function ChatPage() {
               <div className="space-y-2">
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">👤 Çevrim İçi Durumunu Gizle</span>
-                  <input type="checkbox" checked={hideOnline} onChange={(e) => setHideOnline(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span>
-                  <input type="checkbox" checked={disableReadReceipts} onChange={(e) => setDisableReadReceipts(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={disableReadReceipts} onChange={(e) => { setDisableReadReceipts(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">🛡️ Ekran Görüntüsü Koruması</span>
-                  <input type="checkbox" checked={screenshotProtection} onChange={(e) => setScreenshotProtection(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={screenshotProtection} onChange={(e) => { setScreenshotProtection(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
               </div>
             )}
@@ -1386,7 +1390,7 @@ export default function ChatPage() {
               <div className="space-y-2">
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span>Mesaj Bildirim ve Arama Sesleri</span>
-                  <input type="checkbox" checked={soundEnabled} onChange={(e) => setSoundEnabled(e.target.checked)} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
+                  <input type="checkbox" checked={soundEnabled} onChange={(e) => { setSoundEnabled(e.target.checked); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
               </div>
             )}
@@ -1403,7 +1407,7 @@ export default function ChatPage() {
             {settingsTab === "pin" && (
               <div className="space-y-2 text-xs">
                 <p className="text-gray-400">Uygulama açılışı için hesabınıza özel 4 haneli PIN belirleyin:</p>
-                <input type="password" maxLength={4} value={appPin} onChange={(e) => setAppPin(e.target.value)} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
+                <input type="password" maxLength={4} value={appPin} onChange={(e) => { setAppPin(e.target.value); }} placeholder="••••" className="w-full bg-[#242f3d] border border-gray-700 text-center text-lg tracking-widest text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
               </div>
             )}
             <button onClick={() => setSettingsModalOpen(false)} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl shadow-lg cursor-pointer">Kaydet ve Kapat</button>
