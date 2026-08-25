@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { supabase } from "@/lib/supabase";
@@ -9,6 +9,7 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
     { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
@@ -41,10 +42,10 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
   );
 }
 
-// MOBİL İÇİN KOMPAKT SES OYNATICI
 function CompactAudioPlayer({ src }: { src: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   function togglePlay() {
     if (!audioRef.current) return;
@@ -56,17 +57,38 @@ function CompactAudioPlayer({ src }: { src: string }) {
     }
   }
 
+  function handleTimeUpdate() {
+    if (audioRef.current) {
+      const p = (audioRef.current.currentTime / (audioRef.current.duration || 1)) * 100;
+      setProgress(p);
+    }
+  }
+
   return (
-    <div className="flex items-center gap-2 py-1 px-2 bg-black/30 rounded-xl my-0.5 max-w-[200px]">
-      <audio ref={audioRef} src={src} onEnded={() => setIsPlaying(false)} className="hidden" playsInline />
-      <button type="button" onClick={togglePlay} className="w-7 h-7 rounded-full bg-[#14F195] text-black flex items-center justify-center text-xs font-black shadow active:scale-95 cursor-pointer">
+    <div className="flex items-center gap-2 py-1 px-2.5 bg-black/40 rounded-xl my-0.5 max-w-[210px] select-none">
+      <audio 
+        ref={audioRef} 
+        src={src} 
+        onTimeUpdate={handleTimeUpdate} 
+        onEnded={() => { setIsPlaying(false); setProgress(0); }} 
+        className="hidden" 
+        playsInline 
+      />
+      <button 
+        type="button" 
+        onClick={togglePlay} 
+        className="w-7 h-7 rounded-full bg-[#14F195] hover:bg-[#12d684] text-black flex items-center justify-center text-xs font-black shadow-md active:scale-90 transition-transform cursor-pointer flex-shrink-0"
+      >
         {isPlaying ? "⏸" : "▶"}
       </button>
-      <div className="flex-1 flex flex-col justify-center">
-        <div className="h-1 bg-gray-600 rounded-full overflow-hidden">
-          <div className={`h-full bg-[#14F195] ${isPlaying ? "animate-pulse w-full" : "w-1/3"}`} />
+      <div className="flex-1 flex flex-col justify-center gap-1">
+        <div className="h-1.5 w-full bg-gray-700/80 rounded-full overflow-hidden">
+          <div className="h-full bg-[#14F195] transition-all duration-100" style={{ width: `${progress}%` }} />
         </div>
-        <span className="text-[9px] text-gray-300 mt-0.5">Sesli Mesaj</span>
+        <div className="flex justify-between items-center text-[9px] text-gray-300/80 font-medium">
+          <span>{isPlaying ? "Oynatılıyor..." : "Ses Kaydı"}</span>
+          <span>🎙️</span>
+        </div>
       </div>
     </div>
   );
@@ -170,13 +192,13 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  function getChatStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
+  const getChatStorageKey = useCallback((user: string, partnerOrGroupId: string, isGroup: boolean) => {
     const u1 = (user || "").toLowerCase().trim();
     const u2 = (partnerOrGroupId || "").toLowerCase().trim();
     return isGroup ? `rishyou_chat_grp_${u2}` : `rishyou_chat_dm_${[u1, u2].sort().join("_")}`;
-  }
+  }, []);
 
-  function saveMessageToStorage(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
+  const saveMessageToStorage = useCallback((user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) => {
     try {
       const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
       const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
@@ -188,16 +210,30 @@ export default function ChatPage() {
         localStorage.setItem(key, JSON.stringify(existing));
       }
     } catch {}
-  }
+  }, [getChatStorageKey]);
 
-  function getMessagesFromStorage(user: string, partnerOrGroupId: string, isGroup: boolean): any[] {
+  const getMessagesFromStorage = useCallback((user: string, partnerOrGroupId: string, isGroup: boolean): any[] => {
     try {
       const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
       return JSON.parse(localStorage.getItem(key) || "[]");
     } catch {
       return [];
     }
-  }
+  }, [getChatStorageKey]);
+
+  const addChatPartner = useCallback((partnerName: string) => {
+    if (!currentUser) return;
+    const cleanPartner = partnerName.trim();
+    setActiveChatPartners((prev) => {
+      const exists = prev.some((p) => p.toLowerCase() === cleanPartner.toLowerCase());
+      if (!exists) {
+        const updated = [cleanPartner, ...prev];
+        localStorage.setItem(`rishyou_partners_${currentUser.toLowerCase()}`, JSON.stringify(updated));
+        return updated;
+      }
+      return prev;
+    });
+  }, [currentUser]);
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
@@ -211,221 +247,7 @@ export default function ChatPage() {
     }
   }
 
-  function addChatPartner(partnerName: string) {
-    if (!currentUser) return;
-    const cleanPartner = partnerName.trim();
-    setActiveChatPartners((prev) => {
-      const exists = prev.some((p) => p.toLowerCase() === cleanPartner.toLowerCase());
-      if (!exists) {
-        const updated = [cleanPartner, ...prev];
-        localStorage.setItem(`rishyou_partners_${currentUser.toLowerCase()}`, JSON.stringify(updated));
-        return updated;
-      }
-      return prev;
-    });
-  }
-
-  useEffect(() => {
-    const rawUser = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_saved_username");
-    if (!rawUser) {
-      router.push("/");
-    } else {
-      const user = rawUser.trim();
-      setCurrentUser(user);
-      localStorage.setItem("rishyou_saved_username", user);
-
-      loadUsers(user);
-      loadGroups(user);
-      loadWalletData(user);
-      loadChatPartners(user);
-
-      const savedPartners = localStorage.getItem(`rishyou_partners_${user.toLowerCase()}`);
-      if (savedPartners) {
-        try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
-      }
-
-      const lastActive = localStorage.getItem(`rishyou_last_active_${user.toLowerCase()}`);
-      if (lastActive) {
-        try { setActiveChat(JSON.parse(lastActive)); } catch {}
-      }
-
-      const savedVault = localStorage.getItem(`rishyou_vault_${user.toLowerCase()}`);
-      if (savedVault) setVaultNotes(JSON.parse(savedVault));
-
-      const savedPins = localStorage.getItem(`rishyou_pins_${user.toLowerCase()}`);
-      if (savedPins) setPinnedChats(JSON.parse(savedPins));
-
-      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user.toLowerCase()}`);
-      if (savedTimers) {
-        try { setChatTimers(JSON.parse(savedTimers)); } catch {}
-      }
-
-      let userHideOnline = false;
-      const savedSettings = localStorage.getItem(`rishyou_settings_${user.toLowerCase()}`);
-      if (savedSettings) {
-        try {
-          const parsed = JSON.parse(savedSettings);
-          if (parsed.hideOnline !== undefined) {
-            setHideOnline(parsed.hideOnline);
-            userHideOnline = parsed.hideOnline;
-          }
-          if (parsed.disableReadReceipts !== undefined) setDisableReadReceipts(parsed.disableReadReceipts);
-          if (parsed.screenshotProtection !== undefined) setScreenshotProtection(parsed.screenshotProtection);
-          if (parsed.soundEnabled !== undefined) setSoundEnabled(parsed.soundEnabled);
-          if (parsed.appPin !== undefined) setAppPin(parsed.appPin);
-          if (parsed.lang !== undefined) setLang(parsed.lang);
-        } catch {}
-      }
-
-      initRealtimeHub(user, userHideOnline);
-    }
-
-    const tpsInterval = setInterval(() => {
-      setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
-    }, 3000);
-
-    // MOBİL İÇİN 3 SANİYELİK KESİNTİSİZ SENKRONİZASYON (Failsafe Sync)
-    const mobileSyncInterval = setInterval(() => {
-      const cur = activeChatRef.current;
-      const user = sessionStorage.getItem("rishyou_username");
-      if (cur && user) {
-        if (cur.isGroup) loadGroupMessages(cur.id);
-        else loadDirectMessages(user, cur.name);
-      }
-    }, 3000);
-
-    return () => {
-      clearInterval(tpsInterval);
-      clearInterval(mobileSyncInterval);
-      if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
-    };
-  }, [router]);
-
-  function setAutoDeleteForCurrentChat(hours: number) {
-    if (!currentUser || !activeChat) return;
-    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name.toLowerCase();
-    const updated = { ...chatTimers, [chatKey]: hours };
-    setChatTimers(updated);
-    localStorage.setItem(`rishyou_chat_timers_${currentUser.toLowerCase()}`, JSON.stringify(updated));
-    setChatTimerModalOpen(false);
-  }
-
-  function saveUserSettings(updated: any) {
-    if (!currentUser) return;
-    const settings = {
-      hideOnline,
-      disableReadReceipts,
-      screenshotProtection,
-      soundEnabled,
-      appPin,
-      lang,
-      ...updated
-    };
-    localStorage.setItem(`rishyou_settings_${currentUser.toLowerCase()}`, JSON.stringify(settings));
-
-    if (updated.hideOnline !== undefined && signalChannelRef.current) {
-      signalChannelRef.current.track({
-        username: currentUser,
-        online_at: new Date().toISOString(),
-        hideOnline: updated.hideOnline
-      });
-    }
-  }
-
-  useEffect(() => {
-    if (localVideoRef.current && localStreamState && isVideoCall) {
-      localVideoRef.current.srcObject = localStreamState;
-    }
-  }, [localStreamState, callModalOpen, isVideoCall]);
-
-  useEffect(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
-    }
-  }, [isMuted]);
-
-  useEffect(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = !cameraOff; });
-    }
-  }, [cameraOff]);
-
-  useEffect(() => {
-    if (incomingCall && soundEnabled) {
-      ringtoneRef.current?.play().catch(() => {});
-    } else {
-      ringtoneRef.current?.pause();
-      if (ringtoneRef.current) ringtoneRef.current.currentTime = 0;
-    }
-  }, [incomingCall, soundEnabled]);
-
-  useEffect(() => {
-    if (callStatus.includes("aranıyor") && soundEnabled) {
-      dialtoneRef.current?.play().catch(() => {});
-    } else {
-      dialtoneRef.current?.pause();
-      if (dialtoneRef.current) dialtoneRef.current.currentTime = 0;
-    }
-  }, [callStatus, soundEnabled]);
-
-  useEffect(() => {
-    if (!currentUser || !activeChat) return;
-
-    if (activeChat.isGroup) {
-      loadGroupMessages(activeChat.id);
-    } else {
-      loadDirectMessages(currentUser, activeChat.name);
-    }
-  }, [currentUser, activeChat]);
-
-  useEffect(() => { 
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
-  }, [messages]);
-
-  function togglePin(id: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    setPinnedChats(prev => {
-      const updated = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
-      localStorage.setItem(`rishyou_pins_${currentUser?.toLowerCase()}`, JSON.stringify(updated));
-      return updated;
-    });
-  }
-
-  async function loadUsers(current: string) { 
-    const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
-    if (data) setUsers(data); 
-  }
-
-  async function loadChatPartners(current: string) {
-    try {
-      const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.ilike.${current},receiver.ilike.${current}`);
-      if (data) {
-        const partners = new Set<string>(activeChatPartners);
-        data.forEach((m) => { 
-          if (m.sender?.toLowerCase() !== current.toLowerCase()) partners.add(m.sender); 
-          if (m.receiver?.toLowerCase() !== current.toLowerCase()) partners.add(m.receiver); 
-        });
-        const arr = Array.from(partners);
-        setActiveChatPartners(arr);
-        localStorage.setItem(`rishyou_partners_${current.toLowerCase()}`, JSON.stringify(arr));
-      }
-    } catch {}
-  }
-
-  async function loadGroups(username: string) {
-    try {
-      const { data } = await supabase.from("groups").select("*");
-      if (data) {
-        const myGroups = data.filter((g: any) => {
-          const membersList = Array.isArray(g.members) ? g.members.map((m: string) => m.toLowerCase()) : [];
-          return g.created_by?.toLowerCase() === username.toLowerCase() || membersList.includes(username.toLowerCase());
-        });
-        setGroups(myGroups);
-      }
-    } catch {}
-  }
-
-  async function loadDirectMessages(u1: string, u2: string) { 
+  const loadDirectMessages = useCallback(async (u1: string, u2: string) => {
     const localMsgs = getMessagesFromStorage(u1, u2, false);
     if (localMsgs.length > 0) {
       setMessages(localMsgs);
@@ -436,7 +258,7 @@ export default function ChatPage() {
         .from("messages")
         .select("*")
         .or(`and(sender.ilike.${u1},receiver.ilike.${u2}),and(sender.ilike.${u2},receiver.ilike.${u1})`)
-        .order("created_at", { ascending: true }); 
+        .order("created_at", { ascending: true });
 
       if (!error && data) {
         const mergedMap = new Map();
@@ -450,9 +272,9 @@ export default function ChatPage() {
     } catch (e) {
       console.error("Bulut mesaj senkronizasyon hatası:", e);
     }
-  }
+  }, [getMessagesFromStorage, saveMessageToStorage]);
 
-  async function loadGroupMessages(groupId: string) { 
+  const loadGroupMessages = useCallback(async (groupId: string) => {
     const isMember = groupsRef.current.some((g) => g.id === groupId);
     if (!isMember) {
       setMessages([]);
@@ -469,8 +291,8 @@ export default function ChatPage() {
         .from("group_messages")
         .select("*")
         .eq("group_id", groupId)
-        .order("created_at", { ascending: true }); 
-      
+        .order("created_at", { ascending: true });
+
       if (!error && data) {
         const mergedMap = new Map();
         [...localMsgs, ...data].forEach((m) => {
@@ -483,24 +305,39 @@ export default function ChatPage() {
     } catch (e) {
       console.error("Grup mesaj hatası:", e);
     }
-  }
+  }, [currentUser, getMessagesFromStorage, saveMessageToStorage]);
 
-  async function loadWalletData(username: string) {
-    const { data } = await supabase.from("users").select("wallet_address").ilike("username", username).single();
-    if (data && data.wallet_address) {
-      setWalletAddress(data.wallet_address);
-      try {
-        const conn = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
-        const pub = new PublicKey(data.wallet_address);
-        const bal = await conn.getBalance(pub);
-        setSolBalance(bal / LAMPORTS_PER_SOL);
-      } catch { setSolBalance(0); }
+  const cleanupCall = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => {
+        t.stop();
+        t.enabled = false;
+      });
+      localStreamRef.current = null;
     }
-  }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    iceCandidateQueue.current = [];
+    setLocalStreamState(null);
+    setCallModalOpen(false);
+    setIncomingCall(null);
+    setCallStatus("");
+    currentCallPartnerRef.current = null;
+    setIsMuted(false);
+    setIsSpeakerOff(false);
+    setCameraOff(false);
 
-  function initRealtimeHub(username: string, isHideOnline: boolean) {
+    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
+    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
+    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
+    if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
+  }, []);
+
+  const initRealtimeHub = useCallback((username: string, isHideOnline: boolean) => {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
-      config: { 
+      config: {
         broadcast: { self: false },
         presence: { key: username.toLowerCase() }
       }
@@ -579,6 +416,218 @@ export default function ChatPage() {
     });
 
     signalChannelRef.current = channel;
+  }, [addChatPartner, cleanupCall, saveMessageToStorage]);
+
+  useEffect(() => {
+    const rawUser = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_saved_username");
+    if (!rawUser) {
+      router.push("/");
+    } else {
+      const user = rawUser.trim();
+      setCurrentUser(user);
+      localStorage.setItem("rishyou_saved_username", user);
+
+      loadUsers(user);
+      loadGroups(user);
+      loadWalletData(user);
+      loadChatPartners(user);
+
+      const savedPartners = localStorage.getItem(`rishyou_partners_${user.toLowerCase()}`);
+      if (savedPartners) {
+        try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
+      }
+
+      const lastActive = localStorage.getItem(`rishyou_last_active_${user.toLowerCase()}`);
+      if (lastActive) {
+        try { setActiveChat(JSON.parse(lastActive)); } catch {}
+      }
+
+      const savedVault = localStorage.getItem(`rishyou_vault_${user.toLowerCase()}`);
+      if (savedVault) setVaultNotes(JSON.parse(savedVault));
+
+      const savedPins = localStorage.getItem(`rishyou_pins_${user.toLowerCase()}`);
+      if (savedPins) setPinnedChats(JSON.parse(savedPins));
+
+      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user.toLowerCase()}`);
+      if (savedTimers) {
+        try { setChatTimers(JSON.parse(savedTimers)); } catch {}
+      }
+
+      let userHideOnline = false;
+      const savedSettings = localStorage.getItem(`rishyou_settings_${user.toLowerCase()}`);
+      if (savedSettings) {
+        try {
+          const parsed = JSON.parse(savedSettings);
+          if (parsed.hideOnline !== undefined) {
+            setHideOnline(parsed.hideOnline);
+            userHideOnline = parsed.hideOnline;
+          }
+          if (parsed.disableReadReceipts !== undefined) setDisableReadReceipts(parsed.disableReadReceipts);
+          if (parsed.screenshotProtection !== undefined) setScreenshotProtection(parsed.screenshotProtection);
+          if (parsed.soundEnabled !== undefined) setSoundEnabled(parsed.soundEnabled);
+          if (parsed.appPin !== undefined) setAppPin(parsed.appPin);
+          if (parsed.lang !== undefined) setLang(parsed.lang);
+        } catch {}
+      }
+
+      initRealtimeHub(user, userHideOnline);
+    }
+
+    const tpsInterval = setInterval(() => {
+      setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
+    }, 3000);
+
+    const mobileSyncInterval = setInterval(() => {
+      const cur = activeChatRef.current;
+      const user = sessionStorage.getItem("rishyou_username");
+      if (cur && user) {
+        if (cur.isGroup) loadGroupMessages(cur.id);
+        else loadDirectMessages(user, cur.name);
+      }
+    }, 3000);
+
+    return () => {
+      clearInterval(tpsInterval);
+      clearInterval(mobileSyncInterval);
+      if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
+    };
+  }, [initRealtimeHub, loadDirectMessages, loadGroupMessages, router]);
+
+  function setAutoDeleteForCurrentChat(hours: number) {
+    if (!currentUser || !activeChat) return;
+    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name.toLowerCase();
+    const updated = { ...chatTimers, [chatKey]: hours };
+    setChatTimers(updated);
+    localStorage.setItem(`rishyou_chat_timers_${currentUser.toLowerCase()}`, JSON.stringify(updated));
+    setChatTimerModalOpen(false);
+  }
+
+  function saveUserSettings(updated: any) {
+    if (!currentUser) return;
+    const settings = {
+      hideOnline,
+      disableReadReceipts,
+      screenshotProtection,
+      soundEnabled,
+      appPin,
+      lang,
+      ...updated
+    };
+    localStorage.setItem(`rishyou_settings_${currentUser.toLowerCase()}`, JSON.stringify(settings));
+
+    if (updated.hideOnline !== undefined && signalChannelRef.current) {
+      signalChannelRef.current.track({
+        username: currentUser,
+        online_at: new Date().toISOString(),
+        hideOnline: updated.hideOnline
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (localVideoRef.current && localStreamState && isVideoCall) {
+      localVideoRef.current.srcObject = localStreamState;
+    }
+  }, [localStreamState, callModalOpen, isVideoCall]);
+
+  useEffect(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
+    }
+  }, [isMuted]);
+
+  useEffect(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = !cameraOff; });
+    }
+  }, [cameraOff]);
+
+  useEffect(() => {
+    if (incomingCall && soundEnabled) {
+      ringtoneRef.current?.play().catch(() => {});
+    } else {
+      ringtoneRef.current?.pause();
+      if (ringtoneRef.current) ringtoneRef.current.currentTime = 0;
+    }
+  }, [incomingCall, soundEnabled]);
+
+  useEffect(() => {
+    if (callStatus.includes("aranıyor") && soundEnabled) {
+      dialtoneRef.current?.play().catch(() => {});
+    } else {
+      dialtoneRef.current?.pause();
+      if (dialtoneRef.current) dialtoneRef.current.currentTime = 0;
+    }
+  }, [callStatus, soundEnabled]);
+
+  useEffect(() => {
+    if (!currentUser || !activeChat) return;
+
+    if (activeChat.isGroup) {
+      loadGroupMessages(activeChat.id);
+    } else {
+      loadDirectMessages(currentUser, activeChat.name);
+    }
+  }, [currentUser, activeChat, loadDirectMessages, loadGroupMessages]);
+
+  useEffect(() => { 
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
+  }, [messages]);
+
+  function togglePin(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setPinnedChats(prev => {
+      const updated = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+      localStorage.setItem(`rishyou_pins_${currentUser?.toLowerCase()}`, JSON.stringify(updated));
+      return updated;
+    });
+  }
+
+  async function loadUsers(current: string) { 
+    const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
+    if (data) setUsers(data); 
+  }
+
+  async function loadChatPartners(current: string) {
+    try {
+      const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.ilike.${current},receiver.ilike.${current}`);
+      if (data) {
+        const partners = new Set<string>(activeChatPartners);
+        data.forEach((m) => { 
+          if (m.sender?.toLowerCase() !== current.toLowerCase()) partners.add(m.sender); 
+          if (m.receiver?.toLowerCase() !== current.toLowerCase()) partners.add(m.receiver); 
+        });
+        const arr = Array.from(partners);
+        setActiveChatPartners(arr);
+        localStorage.setItem(`rishyou_partners_${current.toLowerCase()}`, JSON.stringify(arr));
+      }
+    } catch {}
+  }
+
+  async function loadGroups(username: string) {
+    try {
+      const { data } = await supabase.from("groups").select("*");
+      if (data) {
+        const myGroups = data.filter((g: any) => {
+          const membersList = Array.isArray(g.members) ? g.members.map((m: string) => m.toLowerCase()) : [];
+          return g.created_by?.toLowerCase() === username.toLowerCase() || membersList.includes(username.toLowerCase());
+        });
+        setGroups(myGroups);
+      }
+    } catch {}
+  }
+
+  async function loadWalletData(username: string) {
+    const { data } = await supabase.from("users").select("wallet_address").ilike("username", username).single();
+    if (data && data.wallet_address) {
+      setWalletAddress(data.wallet_address);
+      try {
+        const conn = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+        const pub = new PublicKey(data.wallet_address);
+        const bal = await conn.getBalance(pub);
+        setSolBalance(bal / LAMPORTS_PER_SOL);
+      } catch { setSolBalance(0); }
+    }
   }
 
   function sendSignal(receiver: string, type: string, payload: string) {
@@ -853,34 +902,6 @@ export default function ChatPage() {
     }
   }
 
-  function cleanupCall() {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => {
-        t.stop();
-        t.enabled = false;
-      });
-      localStreamRef.current = null;
-    }
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-    iceCandidateQueue.current = [];
-    setLocalStreamState(null);
-    setCallModalOpen(false);
-    setIncomingCall(null);
-    setCallStatus("");
-    currentCallPartnerRef.current = null;
-    setIsMuted(false);
-    setIsSpeakerOff(false);
-    setCameraOff(false);
-
-    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
-    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
-    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
-    if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
-  }
-
   function endCall(sendEndSignal = true) {
     const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
     if (sendEndSignal && target && currentUser) {
@@ -911,33 +932,43 @@ export default function ChatPage() {
     setNewVaultNote("");
   }
 
-  const visibleUsers = searchQuery.trim()
-    ? users.filter((u) => u.username?.toLowerCase().includes(searchQuery.toLowerCase()))
-    : users.filter((u) => activeChatPartners.some((p) => p.toLowerCase() === u.username?.toLowerCase()));
+  const visibleUsers = useMemo(() => {
+    return searchQuery.trim()
+      ? users.filter((u) => u.username?.toLowerCase().includes(searchQuery.toLowerCase()))
+      : users.filter((u) => activeChatPartners.some((p) => p.toLowerCase() === u.username?.toLowerCase()));
+  }, [searchQuery, users, activeChatPartners]);
 
-  const filteredGroups = groups.filter((g) => g.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredGroups = useMemo(() => {
+    return groups.filter((g) => g.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [groups, searchQuery]);
 
-  const sortedUsers = [...visibleUsers].sort((a, b) => {
-    const aPin = pinnedChats.includes(a.username);
-    const bPin = pinnedChats.includes(b.username);
-    return aPin === bPin ? 0 : aPin ? -1 : 1;
-  });
+  const sortedUsers = useMemo(() => {
+    return [...visibleUsers].sort((a, b) => {
+      const aPin = pinnedChats.includes(a.username);
+      const bPin = pinnedChats.includes(b.username);
+      return aPin === bPin ? 0 : aPin ? -1 : 1;
+    });
+  }, [pinnedChats, visibleUsers]);
 
-  const sortedGroups = [...filteredGroups].sort((a, b) => {
-    const aPin = pinnedChats.includes(a.id);
-    const bPin = pinnedChats.includes(b.id);
-    return aPin === bPin ? 0 : aPin ? -1 : 1;
-  });
+  const sortedGroups = useMemo(() => {
+    return [...filteredGroups].sort((a, b) => {
+      const aPin = pinnedChats.includes(a.id);
+      const bPin = pinnedChats.includes(b.id);
+      return aPin === bPin ? 0 : aPin ? -1 : 1;
+    });
+  }, [filteredGroups, pinnedChats]);
 
   const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name?.toLowerCase()) : "";
   const currentChatTimerHours = currentChatKey ? (chatTimers[currentChatKey] || 0) : 0;
 
-  const displayMessages = messages.filter((m) => {
-    if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
-    const msgTime = new Date(m.created_at).getTime();
-    const now = Date.now();
-    return (now - msgTime) < currentChatTimerHours * 60 * 60 * 1000;
-  });
+  const displayMessages = useMemo(() => {
+    return messages.filter((m) => {
+      if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
+      const msgTime = new Date(m.created_at).getTime();
+      const now = Date.now();
+      return (now - msgTime) < currentChatTimerHours * 60 * 60 * 1000;
+    });
+  }, [currentChatTimerHours, messages]);
 
   function getUserOnlineStatus(username: string) {
     const info = presenceMap[username?.toLowerCase()];
@@ -948,7 +979,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
+    <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans select-none">
       
       {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
