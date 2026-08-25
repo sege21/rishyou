@@ -9,10 +9,7 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:global.stun.twilio.com:3478" },
-    { urls: "stun:openrelay.metered.ca:80" },
-    { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" }
+    { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
 
@@ -99,6 +96,7 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
+  // ARAMA VE SES REFERANSLARI
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
@@ -160,17 +158,13 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !isMuted;
-      });
+      localStreamRef.current.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
     }
   }, [isMuted]);
 
   useEffect(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach(track => {
-        track.enabled = !cameraOff;
-      });
+      localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = !cameraOff; });
     }
   }, [cameraOff]);
 
@@ -309,6 +303,7 @@ export default function ChatPage() {
     } catch (err: any) { alert("Grup hatası: " + err.message); }
   }
 
+  // WEBRTC SİNYAL VE ANLIK DİNLEME
   function subscribeToSignals(username: string) {
     supabase
       .channel(`signals_${username}`)
@@ -320,7 +315,7 @@ export default function ChatPage() {
           setIncomingCall(sig);
         } else if (sig.type === "answer" && peerConnectionRef.current) {
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(sig.payload)));
-          setCallStatus("Görüşme Bağlandı 🟢");
+          setCallStatus("Ses Hattı Bağlandı 🟢");
           while (iceCandidateQueue.current.length > 0) {
             const candidate = iceCandidateQueue.current.shift();
             try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
@@ -351,8 +346,7 @@ export default function ChatPage() {
     };
 
     pc.ontrack = (event) => {
-      let stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-      
+      const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
         remoteAudioRef.current.play().catch(() => {});
@@ -361,10 +355,11 @@ export default function ChatPage() {
         remoteVideoRef.current.srcObject = stream;
         remoteVideoRef.current.play().catch(() => {});
       }
+      setCallStatus("Ses Hattı Bağlandı 🟢");
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") setCallStatus("Görüşme Bağlandı 🟢");
+      if (pc.connectionState === "connected") setCallStatus("Görüşme Aktif 🟢");
       else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") setCallStatus("Bağlantı Koptu 🔴");
     };
 
@@ -418,7 +413,7 @@ export default function ChatPage() {
     currentCallPartnerRef.current = caller;
 
     setCallModalOpen(true);
-    setCallStatus("Bağlanıyor...");
+    setCallStatus("Bağlantı Kuruluyor...");
     setIsMuted(false);
     setIsSpeakerOff(false);
     setCameraOff(false);
@@ -453,7 +448,7 @@ export default function ChatPage() {
       await supabase.from("signals").insert([{ sender: currentUser, receiver: caller, type: "answer", payload: JSON.stringify(answer) }]);
       
       setIncomingCall(null);
-      setCallStatus("Görüşme Bağlandı 🟢");
+      setCallStatus("Ses Hattı Bağlandı 🟢");
 
       while (iceCandidateQueue.current.length > 0) {
         const candidate = iceCandidateQueue.current.shift();
@@ -538,7 +533,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
       
-      {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI (Görünür Layout) */}
+      {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
@@ -912,7 +907,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ARAMA EKRANI MODALI */}
+      {/* ARAMA MODALI */}
       {callModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/90 backdrop-blur-xl">
           <div className="w-full max-w-md bg-[#17212b] border border-gray-700 rounded-3xl p-5 text-center space-y-3 shadow-2xl">
