@@ -139,7 +139,6 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  // KALICI DEPOLAMA YARDIMCILARI
   function getChatStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
     return isGroup ? `rishyou_chat_grp_${partnerOrGroupId}` : `rishyou_chat_dm_${[user, partnerOrGroupId].sort().join("_")}`;
   }
@@ -209,7 +208,6 @@ export default function ChatPage() {
         try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
       }
 
-      // SAYFA YENİLENİNCE AÇIK SOHBETİ GERİ YÜKLE
       const lastActive = localStorage.getItem(`rishyou_last_active_${user}`);
       if (lastActive) {
         try { setActiveChat(JSON.parse(lastActive)); } catch {}
@@ -323,7 +321,6 @@ export default function ChatPage() {
     }
   }, [callStatus, soundEnabled]);
 
-  // SOHBET DEĞİŞTİĞİNDE VEYA SAYFA YENİLENDİĞİNDE MESAJLARI DİSKTEN VE BULUTTAN ÇEK
   useEffect(() => {
     if (!currentUser || !activeChat) return;
 
@@ -380,11 +377,9 @@ export default function ChatPage() {
   }
 
   async function loadDirectMessages(u1: string, u2: string) { 
-    // 1. Önce doğrudan yerel diskten yükle (0 milisaniye gecikme, yenileyince ASLA kaybolmaz)
     const localMsgs = getMessagesFromStorage(u1, u2, false);
     setMessages(localMsgs);
 
-    // 2. Supabase ile senkronize et ve eksik varsa birleştir
     try {
       const { data, error } = await supabase
         .from("messages")
@@ -499,7 +494,6 @@ export default function ChatPage() {
       }
     });
 
-    // GELEN ANLIK MESAJLARI DİSKE VE EKRANA MÜHÜRLE
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -544,7 +538,6 @@ export default function ChatPage() {
     }
   }
 
-  // ANLIK VE KALICI MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -562,10 +555,8 @@ export default function ChatPage() {
       isGroup: activeChat.isGroup
     };
 
-    // 1. Ekrana anında yaz
     setMessages((prev) => [...prev, newMsg]);
 
-    // 2. Kendi cihazının kalıcı hafızasına kaydet
     const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
     saveMessageToStorage(currentUser, targetId, activeChat.isGroup, newMsg);
 
@@ -573,7 +564,6 @@ export default function ChatPage() {
       addChatPartner(activeChat.name);
     }
 
-    // 3. Karşı tarafa anında ilet
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -582,7 +572,6 @@ export default function ChatPage() {
       });
     }
 
-    // 4. Supabase'e kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -853,7 +842,6 @@ export default function ChatPage() {
     setNewVaultNote("");
   }
 
-  // SOL LİSTE: Arama varsa aranan kişiler, yoksa aktif sohbet edilen kişiler
   const visibleUsers = searchQuery.trim()
     ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
     : users.filter((u) => activeChatPartners.includes(u.username));
@@ -1059,88 +1047,111 @@ export default function ChatPage() {
         </div>
       </aside>
 
+      {/* SOHBET PENCERESİ VE ORTALANMIŞ İÇERİK ALANI */}
       <main className={`flex-1 flex flex-col bg-[#0e1621] relative ${!activeChat ? "hidden md:flex" : "flex"}`}>
         {activeChat ? (
           <>
-            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#242f3d] bg-[#17212b]/90 backdrop-blur-md z-10 gap-2">
-              <div className="flex items-center gap-2.5 min-w-0">
+            {/* ÜST BAŞLIK */}
+            <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#242f3d] bg-[#17212b]/95 backdrop-blur-md z-10 gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-shrink-0">
                 <button onClick={() => selectChat(null)} className="md:hidden p-1.5 -ml-1 text-gray-400 hover:text-white rounded-lg active:bg-gray-800 cursor-pointer">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
                 </button>
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-xs shadow-md ${activeChat.isGroup ? "bg-gradient-to-tr from-[#9945FF] to-[#673AB7] text-white" : "bg-gradient-to-tr from-[#9945FF] to-[#14F195] text-black"}`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-xs shadow-md flex-shrink-0 ${activeChat.isGroup ? "bg-gradient-to-tr from-[#9945FF] to-[#673AB7] text-white" : "bg-gradient-to-tr from-[#9945FF] to-[#14F195] text-black"}`}>
                   {activeChat.isGroup ? "👥" : activeChat.name.slice(0, 2).toUpperCase()}
                 </div>
-                <div>
-                  <h2 className="text-xs font-bold text-white">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-[#14F195]">
+                <div className="min-w-0">
+                  <h2 className="text-xs font-bold text-white truncate max-w-[110px] sm:max-w-xs">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-[#14F195] truncate">
                       {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
                     </span>
                     {currentChatTimerHours > 0 && (
-                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.2 rounded font-bold">
-                        ⏱️ {currentChatTimerHours === 24 ? "24s Silme" : currentChatTimerHours === 1 ? "1s Silme" : "7g Silme"}
+                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 py-0.2 rounded font-bold flex-shrink-0">
+                        ⏱️ {currentChatTimerHours === 24 ? "24s" : currentChatTimerHours === 1 ? "1s" : "7g"}
                       </span>
                     )}
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
+
+              {/* SAĞ BUTONLAR - MOBİLDE KAYDIRILABİLİR */}
+              <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5 max-w-[55%] sm:max-w-none flex-shrink-0">
                 <button 
                   onClick={() => setChatTimerModalOpen(true)} 
                   title="Sadece Bu Sohbet İçin Mesaj Silme Süresi" 
-                  className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${currentChatTimerHours > 0 ? "bg-amber-500/20 text-amber-400 border border-amber-500/40" : "bg-[#242f3d] hover:bg-[#2b394a] text-gray-300"}`}
+                  className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer flex-shrink-0 ${currentChatTimerHours > 0 ? "bg-amber-500/20 text-amber-400 border border-amber-500/40" : "bg-[#242f3d] hover:bg-[#2b394a] text-gray-300"}`}
                 >
                   ⏱️
                 </button>
-
-                <button onClick={() => setVaultModalOpen(true)} title="Kasa" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">📁</button>
-                <button onClick={() => setQrModalOpen(true)} title="QR Kod" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">🎴</button>
-                <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">⭐</button>
-                <button onClick={() => setLeaderboardModalOpen(true)} title="Liderler" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">🏆</button>
+                <button onClick={() => setVaultModalOpen(true)} title="Kasa" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer flex-shrink-0">📁</button>
+                <button onClick={() => setQrModalOpen(true)} title="QR Kod" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer flex-shrink-0">🎴</button>
+                <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer flex-shrink-0">⭐</button>
+                <button onClick={() => setLeaderboardModalOpen(true)} title="Liderler" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer flex-shrink-0">🏆</button>
                 {!activeChat.isGroup && (
                   <>
-                    <button onClick={() => startCall(false)} title="Sesli Arama" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📞</button>
-                    <button onClick={() => startCall(true)} title="Görüntülü Arama" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📹</button>
+                    <button onClick={() => startCall(false)} title="Sesli Arama" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer flex-shrink-0">📞</button>
+                    <button onClick={() => startCall(true)} title="Görüntülü Arama" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer flex-shrink-0">📹</button>
                   </>
                 )}
-                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer">
-                  <span>💸</span><span>Bahşiş</span>
+                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer flex-shrink-0">
+                  <span>💸</span><span className="hidden sm:inline">Bahşiş</span>
                 </button>
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative">
-              <div className="flex justify-end my-1">
-                <div className="p-3 bg-[#1e293b]/95 border border-[#14F195]/40 rounded-2xl text-[11px] shadow-xl max-w-xs space-y-1 backdrop-blur-md">
-                  <div className="flex items-center gap-1 text-white font-bold"><span>📊 Solana (SOL) Canlı Piyasa:</span></div>
-                  <div className="text-gray-200">Fiyat: <span className="font-black text-[#14F195]">${solPrice.toFixed(2)} USD</span> <span className="text-emerald-400 text-[10px]">({solChange})</span></div>
-                  <div className="text-[9px] text-gray-400 pt-0.5 border-t border-gray-700/60 flex justify-between items-center"><span>Kaynak: Pyth / CoinGecko Oracle</span><span className="text-emerald-400">Aktif ✔</span></div>
-                </div>
-              </div>
-
-              {displayMessages.map((m, idx) => {
-                const isMe = m.sender === currentUser;
-                const isAudio = m.message_type === "audio";
-                return (
-                  <div key={idx} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-3.5 py-2 text-xs shadow-md break-words ${isMe ? "bg-gradient-to-r from-[#2b5278] to-[#1e3b56] text-white rounded-br-xs" : "bg-[#182533] text-gray-200 rounded-bl-xs"}`}>
-                      {activeChat.isGroup && !isMe && (
-                        <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
-                      )}
-                      {isAudio ? <audio controls src={m.content} className="max-w-[220px] h-8 my-1" /> : <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>}
-                      <div className="text-[9px] text-gray-400 text-right mt-1 opacity-70">
-                        {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </div>
+            {/* ORTALANMIŞ MESAJ AKIŞI ALANI */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative">
+              <div className="max-w-2xl mx-auto w-full space-y-3 flex flex-col">
+                
+                {/* ORTALANMIŞ SOLANA PİYASA WIDGETI */}
+                <div className="flex justify-center my-1.5">
+                  <div className="p-2.5 sm:p-3 bg-[#1e293b]/90 border border-[#14F195]/30 rounded-2xl text-[11px] shadow-lg w-full max-w-sm backdrop-blur-md space-y-1">
+                    <div className="flex items-center justify-between text-white font-bold">
+                      <span className="flex items-center gap-1.5">📊 Solana (SOL) Canlı:</span>
+                      <span className="text-emerald-400 text-[10px]">Aktif ✔</span>
+                    </div>
+                    <div className="text-gray-200 flex justify-between items-center">
+                      <span>Fiyat: <strong className="text-[#14F195]">${solPrice.toFixed(2)} USD</strong></span>
+                      <span className="text-emerald-400 font-bold text-[10px]">{solChange}</span>
+                    </div>
+                    <div className="text-[9px] text-gray-400 pt-0.5 border-t border-gray-700/60 flex justify-between items-center">
+                      <span>Oracle: Pyth / CoinGecko</span>
+                      <span>Rishyou Web3</span>
                     </div>
                   </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
+                </div>
+
+                {/* MESAJLAR */}
+                {displayMessages.map((m, idx) => {
+                  const isMe = m.sender === currentUser;
+                  const isAudio = m.message_type === "audio";
+                  return (
+                    <div key={idx} className={`flex ${isMe ? "justify-end" : "justify-start"} w-full`}>
+                      <div className={`max-w-[85%] sm:max-w-[70%] rounded-2xl px-3.5 py-2 text-xs shadow-md break-words ${isMe ? "bg-gradient-to-r from-[#2b5278] to-[#1e3b56] text-white rounded-br-xs" : "bg-[#182533] text-gray-200 rounded-bl-xs"}`}>
+                        {activeChat.isGroup && !isMe && (
+                          <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
+                        )}
+                        {isAudio ? (
+                          <audio controls src={m.content} className="max-w-[210px] sm:max-w-[240px] h-8 my-1" />
+                        ) : (
+                          <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                        )}
+                        <div className="text-[9px] text-gray-400 text-right mt-1 opacity-70">
+                          {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={messagesEndRef} />
+              </div>
             </div>
 
+            {/* ORTALANMIŞ MESAJ YAZMA PANELİ */}
             <div className="p-2 sm:p-3 bg-[#17212b] border-t border-[#242f3d] relative">
               {showEmojiPicker && (
-                <div className="absolute bottom-[70px] left-4 bg-[#1e293b] border border-gray-600 rounded-2xl p-3 shadow-2xl z-50">
+                <div className="absolute bottom-[70px] left-1/2 -translate-x-1/2 sm:left-4 sm:translate-x-0 bg-[#1e293b] border border-gray-600 rounded-2xl p-3 shadow-2xl z-50">
                   <div className="grid grid-cols-6 gap-3 text-xl">
                     {["😀","😂","🥰","😎","🤩","😭","😡","🐶","🚀","🔥","💎","💸"].map(emoji => (
                       <button key={emoji} type="button" onClick={() => setText(prev => prev + emoji)} className="hover:scale-125 transition-transform cursor-pointer">
@@ -1150,15 +1161,15 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
-              <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto">
-                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 sm:p-2.5 rounded-2xl text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195]" title="Emoji & Çıkartma">
+              <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-2xl mx-auto w-full">
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 sm:p-2.5 rounded-2xl text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
                   😊
                 </button>
                 <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3.5 py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195]" />
-                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2.5 sm:p-3 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`}>
+                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2.5 sm:p-3 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`}>
                   {isRecordingAudio ? "⏹️" : "🎙️"}
                 </button>
-                <button type="submit" disabled={!text.trim()} className="px-3.5 sm:px-4 py-2.5 sm:py-3 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer">
+                <button type="submit" disabled={!text.trim()} className="px-3.5 sm:px-4 py-2.5 sm:py-3 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">
                   Gönder
                 </button>
               </form>
