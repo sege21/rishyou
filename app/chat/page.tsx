@@ -9,11 +9,21 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
     { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
 
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
+
+// 5. SANİYEDE SES FREKANS BOZULMASINI ENGELLEYEN SAF SES AYARLARI
+const PURE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: false, // 5. saniyede frekans bozulmasını ve robotikleşmeyi önler
+  autoGainControl: false,  // Kazanç filtresinin patlamasını ve dalgalanmasını önler
+  channelCount: 1,
+  sampleRate: 48000
+};
 
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
   return (
@@ -170,20 +180,20 @@ export default function ChatPage() {
     }
   }, []);
 
-  function triggerPushNotification(title: string, body: string) {
+  function triggerPushNotification(title: string, body: string, isCall: boolean = false) {
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
       try {
-        new Notification(title, {
-          body,
-          icon: "/favicon.ico",
-          badge: "/favicon.ico",
-          vibrate: [200, 100, 200]
-        } as any);
-      } catch {
         if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
-          navigator.serviceWorker.controller.postMessage({ title, body });
+          navigator.serviceWorker.controller.postMessage({ title, body, type: isCall ? "call" : "msg" });
+        } else {
+          new Notification(title, {
+            body,
+            icon: "/favicon.ico",
+            badge: "/favicon.ico",
+            vibrate: isCall ? [500, 250, 500, 250, 500] : [200, 100, 200]
+          } as any);
         }
-      }
+      } catch {}
     }
   }
 
@@ -381,7 +391,7 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // Çevrim Dışıyken Gelen Aktif Aramaları / Cevapsız Aramaları Kontrol Et
+  // Çevrim Dışıyken Gelen Aktif Çağrıları / Cevapsız Aramaları Uyandır
   async function checkOfflineIncomingCalls(username: string) {
     try {
       const { data } = await supabase
@@ -397,14 +407,12 @@ export default function ChatPage() {
         const callTime = new Date(call.created_at).getTime();
         const now = Date.now();
 
-        // Arama son 35 saniye içindeyse gelen arama ekranını tetikle
-        if (now - callTime < 35000) {
+        if (now - callTime < 40000) {
           currentCallPartnerRef.current = call.caller;
           setCurrentCallLogId(call.id);
           setIsVideoCall(call.call_type === "video");
           setIncomingCall({ sender: call.caller, payload: "" });
         } else {
-          // Süresi geçmişse cevapsız olarak işaretle
           await supabase.from("call_logs").update({ status: "missed" }).eq("id", call.id);
         }
       }
@@ -443,8 +451,14 @@ export default function ChatPage() {
       setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
     }, 3000);
 
+    // Düzenli aralıklarla gelen cevapsız çağrı veya bekleyen aramaları tara
+    const pollInterval = setInterval(() => {
+      if (user) checkOfflineIncomingCalls(user);
+    }, 8000);
+
     return () => {
       clearInterval(tpsInterval);
+      clearInterval(pollInterval);
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
   }, [router]);
@@ -610,7 +624,7 @@ export default function ChatPage() {
   }
 
   // ==========================================
-  // WEBRTC VE SİNYALLEŞME MOTORU
+  // GELİŞMİŞ WEBRTC VE SİNYALLEŞME MOTORU
   // ==========================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
@@ -636,14 +650,14 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // GELEN SİNYALLER
+    // SİNYAL ALMA VE İŞLEME
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
       if (payload.type === "offer") {
         currentCallPartnerRef.current = payload.sender;
         setIncomingCall(payload);
-        triggerPushNotification("📞 Gelen Arama", `@${payload.sender} sizi arıyor...`);
+        triggerPushNotification("📞 Gelen Arama", `@${payload.sender} sizi arıyor...`, true);
       } else if (payload.type === "answer" && peerConnectionRef.current) {
         try {
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
@@ -669,7 +683,7 @@ export default function ChatPage() {
       }
     });
 
-    // GELEN MESAJLAR
+    // MESAJ ALMA VE BİLDİRİM
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -791,7 +805,6 @@ export default function ChatPage() {
     setIsSpeakerOff(false);
     setCameraOff(false);
 
-    // Veritabanına Çağrı Kaydı Aç (Karşı taraf offline ise açtığı anda yakalar)
     try {
       const { data } = await supabase.from("call_logs").insert([{
         caller: currentUser,
@@ -806,12 +819,12 @@ export default function ChatPage() {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: PURE_AUDIO_CONSTRAINTS,
         video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
       });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: PURE_AUDIO_CONSTRAINTS, video: false });
         setIsVideoCall(false);
       } catch {
         setCallStatus("Mikrofon izni verilmedi!");
@@ -856,12 +869,12 @@ export default function ChatPage() {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: PURE_AUDIO_CONSTRAINTS,
         video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
       });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: PURE_AUDIO_CONSTRAINTS, video: false });
         setIsVideoCall(false);
       } catch {
         setCallStatus("Mikrofon hatası!");
@@ -1008,7 +1021,7 @@ export default function ChatPage() {
   async function startRecordingAudio() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        audio: PURE_AUDIO_CONSTRAINTS
       });
       audioChunksRef.current = [];
 
