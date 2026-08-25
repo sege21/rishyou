@@ -56,7 +56,6 @@ export default function ChatPage() {
 
   const [pinnedChats, setPinnedChats] = useState<string[]>([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [chatExtraMenuOpen, setChatExtraMenuOpen] = useState(false);
 
   const [dogMenuOpen, setDogMenuOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
@@ -169,7 +168,6 @@ export default function ChatPage() {
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
-    setChatExtraMenuOpen(false);
     if (chat && currentUser) {
       localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(chat));
       if (!chat.isGroup) {
@@ -883,11 +881,12 @@ export default function ChatPage() {
   return (
     <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
       
+      {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
 
-      {/* SOL MENÜ */}
+      {/* SOL KENAR ÇUBUĞU (INBOX / SOHBET LİSTESİ) */}
       <aside className={`flex flex-col w-full md:w-80 lg:w-96 bg-[#17212b] border-r border-[#242f3d] flex-shrink-0 relative ${activeChat ? "hidden md:flex" : "flex"}`}>
         
         <div className="flex items-center justify-between p-3 border-b border-[#242f3d] bg-[#17212b] z-20 gap-1.5">
@@ -979,6 +978,7 @@ export default function ChatPage() {
           </div>
         </div>
 
+        {/* LİSTELER */}
         <div className="flex-1 overflow-y-auto px-2 space-y-1 pb-4">
           {(tabFilter === "all" || tabFilter === "groups") && sortedGroups.map((g) => {
             const isSelected = activeChat?.isGroup && activeChat.id === g.id;
@@ -1042,128 +1042,97 @@ export default function ChatPage() {
 
           {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.length === 0 && (
             <div className="text-center py-8 px-4 text-gray-500 text-xs">
-              {searchQuery.trim() ? "Kullanıcı bulunamadı." : "Henüz bir sohbetiniz yok. Üstteki arama çubuğundan kullanıcı adı arayarak sohbete başlayın."}
+              {searchQuery.trim() ? "Kullanıcı bulunamadı." : "Gelen kutunuz boş. Üstteki arama çubuğundan kullanıcı adı arayarak sohbet başlatın."}
             </div>
           )}
         </div>
       </aside>
 
-      {/* SOHBET ALANI (SADE BAŞLIK: SADECE ARAMA, GÖRÜNTÜLÜ VE ⋮ MENÜSÜ) */}
+      {/* SAĞ SOHBET ALANI (OPTIMIZE EDİLMİŞ DÜZEN VE BALON HİZALAMA) */}
       <main className={`flex-1 flex flex-col bg-[#0e1621] relative ${!activeChat ? "hidden md:flex" : "flex"}`}>
         {activeChat ? (
           <>
-            {/* SADE VE TEMİZ ÜST BAŞLIK */}
-            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#242f3d] bg-[#17212b]/95 backdrop-blur-md z-20 gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <button onClick={() => selectChat(null)} className="md:hidden p-1.5 -ml-1 text-gray-400 hover:text-white rounded-lg active:bg-gray-800 cursor-pointer flex-shrink-0">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#242f3d] bg-[#17212b]/90 backdrop-blur-md z-10 gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <button onClick={() => selectChat(null)} className="md:hidden p-1.5 -ml-1 text-gray-400 hover:text-white rounded-lg active:bg-gray-800 cursor-pointer">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
                 </button>
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-xs shadow-md flex-shrink-0 ${activeChat.isGroup ? "bg-gradient-to-tr from-[#9945FF] to-[#673AB7] text-white" : "bg-gradient-to-tr from-[#9945FF] to-[#14F195] text-black"}`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-xs shadow-md ${activeChat.isGroup ? "bg-gradient-to-tr from-[#9945FF] to-[#673AB7] text-white" : "bg-gradient-to-tr from-[#9945FF] to-[#14F195] text-black"}`}>
                   {activeChat.isGroup ? "👥" : activeChat.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div className="min-w-0">
-                  <h2 className="text-xs font-bold text-white truncate max-w-[130px] sm:max-w-xs">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
-                  <div className="flex items-center gap-1">
+                  <h2 className="text-xs font-bold text-white truncate">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
+                  <div className="flex items-center gap-1.5 truncate">
                     <span className="text-[10px] text-[#14F195] truncate">
                       {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
                     </span>
                     {currentChatTimerHours > 0 && (
-                      <span className="text-[8px] bg-amber-500/20 text-amber-400 px-1 py-0.2 rounded font-bold flex-shrink-0">
-                        ⏱️ {currentChatTimerHours === 24 ? "24s" : currentChatTimerHours === 1 ? "1s" : "7g"}
+                      <span className="text-[9px] bg-amber-500/25 text-amber-400 px-1.5 py-0.2 rounded font-bold flex-shrink-0">
+                        ⏱️ {currentChatTimerHours === 24 ? "24s Silme" : currentChatTimerHours === 1 ? "1s Silme" : "7g Silme"}
                       </span>
                     )}
                   </div>
                 </div>
               </div>
-
-              {/* SAĞ BUTONLAR: YALNIZCA SESLİ, GÖRÜNTÜLÜ VE ⋮ MENÜ */}
-              <div className="flex items-center gap-2 flex-shrink-0 relative">
-                {!activeChat.isGroup && (
-                  <>
-                    <button onClick={() => startCall(false)} title="Sesli Arama" className="p-2 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📞</button>
-                    <button onClick={() => startCall(true)} title="Görüntülü Arama" className="p-2 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📹</button>
-                  </>
-                )}
-                
-                {/* 3 NOKTA MENÜ BUTONU */}
-                <button onClick={() => setChatExtraMenuOpen(!chatExtraMenuOpen)} className="p-2 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-200 text-sm font-bold cursor-pointer transition-all active:scale-90">
-                  ⋮
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button 
+                  onClick={() => setChatTimerModalOpen(true)} 
+                  title="Sadece Bu Sohbet İçin Mesaj Silme Süresi" 
+                  className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${currentChatTimerHours > 0 ? "bg-amber-500/20 text-amber-400 border border-amber-500/40" : "bg-[#242f3d] hover:bg-[#2b394a] text-gray-300"}`}
+                >
+                  ⏱️
                 </button>
 
-                {/* 3 NOKTA MENÜSÜ AÇILIR LİSTESİ */}
-                {chatExtraMenuOpen && (
+                <button onClick={() => setVaultModalOpen(true)} title="Kasa" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">📁</button>
+                <button onClick={() => setQrModalOpen(true)} title="QR Kod" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">🎴</button>
+                <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">⭐</button>
+                <button onClick={() => setLeaderboardModalOpen(true)} title="Liderler" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">🏆</button>
+                {!activeChat.isGroup && (
                   <>
-                    <div className="fixed inset-0 z-30" onClick={() => setChatExtraMenuOpen(false)} />
-                    <div className="absolute top-11 right-0 w-52 bg-[#1e293b] border border-[#14F195]/40 rounded-2xl p-2 shadow-2xl z-40 space-y-1">
-                      <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); setChatExtraMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-[#14F195] font-black cursor-pointer text-left">
-                        <span>💸</span> Bahşiş Gönder ($RISH / SOL)
-                      </button>
-                      <button onClick={() => { setChatTimerModalOpen(true); setChatExtraMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-white cursor-pointer text-left">
-                        <span>⏱️</span> Süreli Mesajlar (Silme)
-                      </button>
-                      <button onClick={() => { setVaultModalOpen(true); setChatExtraMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-white cursor-pointer text-left">
-                        <span>📁</span> Kişisel Kasa (Notlar)
-                      </button>
-                      <button onClick={() => { setQrModalOpen(true); setChatExtraMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-white cursor-pointer text-left">
-                        <span>🎴</span> QR Kod ile Ödeme Al
-                      </button>
-                      <button onClick={() => { setStarredModalOpen(true); setChatExtraMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-white cursor-pointer text-left">
-                        <span>⭐</span> Yıldızlı Mesajlar
-                      </button>
-                      <button onClick={() => { setLeaderboardModalOpen(true); setChatExtraMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-amber-400 font-bold cursor-pointer text-left">
-                        <span>🏆</span> Bahşiş Liderleri
-                      </button>
-                    </div>
+                    <button onClick={() => startCall(false)} title="Sesli Arama" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📞</button>
+                    <button onClick={() => startCall(true)} title="Görüntülü Arama" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📹</button>
                   </>
                 )}
+                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer">
+                  <span>💸</span><span>Bahşiş</span>
+                </button>
               </div>
             </div>
 
-            {/* SOHBET AKIŞI (TAM ORTALI) */}
-            <div className="flex-1 overflow-y-auto p-3 sm:p-4 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative">
-              <div className="max-w-xl mx-auto w-full space-y-3 flex flex-col">
-                
-                {/* SOLANA PİYASA BİLGİ BANDI */}
-                <div className="flex justify-center my-1">
-                  <div className="px-3.5 py-1.5 bg-[#1e293b]/90 border border-[#14F195]/30 rounded-full text-[11px] shadow-lg flex items-center gap-2 backdrop-blur-md">
-                    <span className="font-bold text-white">📊 SOL: <strong className="text-[#14F195]">${solPrice.toFixed(2)}</strong></span>
-                    <span className="text-emerald-400 font-bold text-[10px]">{solChange}</span>
-                    <span className="text-gray-400 text-[9px] border-l border-gray-700 pl-2">{tpsCount} TPS</span>
-                  </div>
+            {/* MESAJLAR LİSTESİ (KUSURSUZ WHATSAPP/TELEGRAM BALON HİZALAMASI) */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2.5 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative flex flex-col">
+              <div className="flex justify-center my-1">
+                <div className="p-2.5 bg-[#1e293b]/95 border border-[#14F195]/30 rounded-2xl text-[11px] shadow-xl max-w-xs space-y-1 backdrop-blur-md">
+                  <div className="flex items-center gap-1 text-white font-bold"><span>📊 Solana (SOL) Canlı Piyasa:</span></div>
+                  <div className="text-gray-200">Fiyat: <span className="font-black text-[#14F195]">${solPrice.toFixed(2)} USD</span> <span className="text-emerald-400 text-[10px]">({solChange})</span></div>
+                  <div className="text-[9px] text-gray-400 pt-0.5 border-t border-gray-700/60 flex justify-between items-center"><span>Kaynak: Pyth Oracle</span><span className="text-emerald-400">Aktif ✔</span></div>
                 </div>
+              </div>
 
-                {/* MESAJLAR */}
-                {displayMessages.map((m, idx) => {
-                  const isMe = m.sender === currentUser;
-                  const isAudio = m.message_type === "audio";
-                  return (
-                    <div key={idx} className={`flex ${isMe ? "justify-end" : "justify-start"} w-full`}>
-                      <div className={`max-w-[85%] sm:max-w-[70%] rounded-2xl px-3.5 py-2.5 text-xs shadow-md break-words ${isMe ? "bg-gradient-to-r from-[#2b5278] to-[#1e3b56] text-white rounded-br-xs" : "bg-[#182533] text-gray-200 rounded-bl-xs"}`}>
-                        {activeChat.isGroup && !isMe && (
-                          <p className="text-[10px] font-bold text-[#14F195] mb-1">@{m.sender}</p>
-                        )}
-                        {isAudio ? (
-                          <div className="py-0.5">
-                            <audio controls src={m.content} className="w-full max-w-[220px] sm:max-w-[260px] h-8 rounded-lg" />
-                          </div>
-                        ) : (
-                          <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>
-                        )}
-                        <div className="text-[9px] text-gray-400 text-right mt-1 opacity-70">
-                          {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </div>
+              {displayMessages.map((m, idx) => {
+                const isMe = m.sender === currentUser;
+                const isAudio = m.message_type === "audio";
+                return (
+                  <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[75%] sm:max-w-[65%] rounded-2xl px-3.5 py-2 text-xs shadow-md break-words ${isMe ? "bg-gradient-to-r from-[#2b5278] to-[#1e3b56] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto"}`}>
+                      {activeChat.isGroup && !isMe && (
+                        <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
+                      )}
+                      {isAudio ? <audio controls src={m.content} className="max-w-[200px] h-8 my-1" /> : <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>}
+                      <div className="text-[9px] text-gray-400 text-right mt-1 opacity-70">
+                        {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
-                  );
-                })}
-                <div ref={messagesEndRef} />
-              </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
             </div>
 
-            {/* MESAJ YAZMA PANELİ */}
-            <div className="p-2 sm:p-3 bg-[#17212b] border-t border-[#242f3d] relative">
+            {/* MESAJ YAZMA ALANI */}
+            <div className="p-2.5 sm:p-3 bg-[#17212b] border-t border-[#242f3d] relative">
               {showEmojiPicker && (
-                <div className="absolute bottom-[68px] left-3 sm:left-1/2 sm:-translate-x-1/2 bg-[#1e293b] border border-gray-600 rounded-2xl p-3 shadow-2xl z-50">
+                <div className="absolute bottom-[70px] left-4 bg-[#1e293b] border border-gray-600 rounded-2xl p-3 shadow-2xl z-50">
                   <div className="grid grid-cols-6 gap-3 text-xl">
                     {["😀","😂","🥰","😎","🤩","😭","😡","🐶","🚀","🔥","💎","💸"].map(emoji => (
                       <button key={emoji} type="button" onClick={() => setText(prev => prev + emoji)} className="hover:scale-125 transition-transform cursor-pointer">
@@ -1173,15 +1142,15 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
-              <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-xl mx-auto w-full">
-                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-2xl text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji">
+              <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto">
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2.5 rounded-2xl text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
                   😊
                 </button>
-                <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3.5 py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195]" />
-                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`}>
+                <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3.5 py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" />
+                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">
                   {isRecordingAudio ? "⏹️" : "🎙️"}
                 </button>
-                <button type="submit" disabled={!text.trim()} className="px-3.5 sm:px-4 py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">
+                <button type="submit" disabled={!text.trim()} className="px-4 py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">
                   Gönder
                 </button>
               </form>
@@ -1209,7 +1178,7 @@ export default function ChatPage() {
               <button onClick={() => setChatTimerModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
             <p className="text-[11px] text-gray-400">
-              Bu sohbet için seçilen süreden eski mesajlar otomatik olarak temizlenir. Diğer konuşmalarınız etkilenmez.
+              Bu sohbet için seçilen süreden eski mesajlar otomatik olarak temizlenir. Diğer kişilerle olan konuşmalarınız etkilenmez.
             </p>
             <div className="space-y-1.5">
               {[
@@ -1369,6 +1338,7 @@ export default function ChatPage() {
         </div>
       )}
 
+      {/* ÖZEL GRUP KURMA MODALI */}
       {createGroupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-[#17212b] border border-gray-700 rounded-3xl p-5 shadow-2xl space-y-3">
