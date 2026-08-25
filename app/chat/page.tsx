@@ -132,6 +132,10 @@ export default function ChatPage() {
   const [appPin, setAppPin] = useState("");
   const [lang, setLang] = useState("tr");
 
+  // CANLI YAZIYOR GÖSTERGESİ (Typing Map)
+  const [typingMap, setTypingMap] = useState<Record<string, boolean>>({});
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
 
   const [solPrice, setSolPrice] = useState<number>(96.40);
@@ -168,6 +172,7 @@ export default function ChatPage() {
   
   const activeChatRef = useRef<any>(null);
   const groupsRef = useRef<any[]>([]);
+  const disableReadReceiptsRef = useRef(false);
   const currentCallPartnerRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -192,6 +197,10 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
+  useEffect(() => {
+    disableReadReceiptsRef.current = disableReadReceipts;
+  }, [disableReadReceipts]);
+
   const getChatStorageKey = useCallback((user: string, partnerOrGroupId: string, isGroup: boolean) => {
     const u1 = (user || "").toLowerCase().trim();
     const u2 = (partnerOrGroupId || "").toLowerCase().trim();
@@ -202,13 +211,16 @@ export default function ChatPage() {
     try {
       const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
       const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
-      const exists = existing.some(
-        (m) => m.created_at === msg.created_at && m.sender?.toLowerCase() === msg.sender?.toLowerCase() && m.content === msg.content
+      const idx = existing.findIndex(
+        (m) => (m.id && msg.id && m.id === msg.id) || 
+               (m.created_at === msg.created_at && m.sender?.toLowerCase() === msg.sender?.toLowerCase() && m.content === msg.content)
       );
-      if (!exists) {
+      if (idx >= 0) {
+        existing[idx] = { ...existing[idx], ...msg };
+      } else {
         existing.push(msg);
-        localStorage.setItem(key, JSON.stringify(existing));
       }
+      localStorage.setItem(key, JSON.stringify(existing));
     } catch {}
   }, [getChatStorageKey]);
 
@@ -221,7 +233,6 @@ export default function ChatPage() {
     }
   }, [getChatStorageKey]);
 
-  // ASLA MESAJ SİLMEYEN AKILLI BİRLEŞTİRME (Smart Merge)
   const mergeMessageLists = useCallback((currentList: any[], incomingList: any[]) => {
     const map = new Map<string, any>();
     
@@ -232,7 +243,12 @@ export default function ChatPage() {
 
     incomingList.forEach((m) => {
       const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase()}_${m.created_at}_${m.content}`;
-      map.set(key, m);
+      const existing = map.get(key);
+      if (existing) {
+        map.set(key, { ...existing, ...m, is_read: m.is_read || existing.is_read, is_delivered: m.is_delivered || existing.is_delivered });
+      } else {
+        map.set(key, m);
+      }
     });
 
     return Array.from(map.values()).sort(
@@ -254,12 +270,25 @@ export default function ChatPage() {
     });
   }, [currentUser]);
 
+  // GÖRÜLDÜ BİLDİRİMİ GÖNDER
+  const sendReadReceipt = useCallback((partnerName: string) => {
+    if (!currentUser || !partnerName || disableReadReceiptsRef.current) return;
+    if (signalChannelRef.current) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "read_receipt",
+        payload: { reader: currentUser.toLowerCase(), partner: partnerName.toLowerCase() }
+      });
+    }
+  }, [currentUser]);
+
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
     if (chat && currentUser) {
       localStorage.setItem(`rishyou_last_active_${currentUser.toLowerCase()}`, JSON.stringify(chat));
       if (!chat.isGroup) {
         addChatPartner(chat.name);
+        sendReadReceipt(chat.name);
       }
     } else if (currentUser) {
       localStorage.removeItem(`rishyou_last_active_${currentUser.toLowerCase()}`);
@@ -268,8 +297,6 @@ export default function ChatPage() {
 
   const loadDirectMessages = useCallback(async (u1: string, u2: string) => {
     if (!u1 || !u2) return;
-    
-    // Önce yerelden yükle
     const localMsgs = getMessagesFromStorage(u1, u2, false);
     if (localMsgs.length > 0) {
       setMessages((prev) => mergeMessageLists(prev, localMsgs));
@@ -424,6 +451,7 @@ export default function ChatPage() {
       }
     });
 
+    // 1. CANLI MESAJ GELİŞİ & İLETİLDİ/GÖRÜLDÜ GERİ BİLDİRİMİ
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -438,11 +466,58 @@ export default function ChatPage() {
         if (payload.receiver?.toLowerCase().trim() === cleanUser) {
           saveMessageToStorage(username, payload.sender, false, payload);
           addChatPartner(payload.sender);
+
+          // Karşı tarafa "mesaj bana ulaştı (iletildi)" sinyali gönder
+          channel.send({
+            type: "broadcast",
+            event: "delivery_receipt",
+            payload: { deliveredTo: cleanUser, sender: payload.sender?.toLowerCase().trim() }
+          });
+
+          // Eğer şu an o kişiyle sohbet açıksa, hemen "Görüldü (Mavi Tık)" sinyali gönder
           if (cur && !cur.isGroup && cur.name?.toLowerCase().trim() === payload.sender?.toLowerCase().trim()) {
-            setMessages((prev) => mergeMessageLists(prev, [payload]));
+            setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_read: true }]));
+            if (!disableReadReceiptsRef.current) {
+              channel.send({
+                type: "broadcast",
+                event: "read_receipt",
+                payload: { reader: cleanUser, partner: payload.sender?.toLowerCase().trim() }
+              });
+            }
           }
         }
       }
+    });
+
+    // 2. İLETİLDİ SİNYALİ (Çift Gri Tık)
+    channel.on("broadcast", { event: "delivery_receipt" }, ({ payload }) => {
+      if (!payload || payload.sender !== cleanUser) return;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.sender?.toLowerCase().trim() === cleanUser && m.receiver?.toLowerCase().trim() === payload.deliveredTo
+            ? { ...m, is_delivered: true }
+            : m
+        )
+      );
+    });
+
+    // 3. GÖRÜLDÜ SİNYALİ (Çift Mavi Tık)
+    channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
+      if (!payload || payload.partner !== cleanUser) return;
+      const reader = payload.reader;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.sender?.toLowerCase().trim() === cleanUser && m.receiver?.toLowerCase().trim() === reader
+            ? { ...m, is_read: true, is_delivered: true }
+            : m
+        )
+      );
+    });
+
+    // 4. YAZIYOR... (Typing Indicator) SİNYALİ
+    channel.on("broadcast", { event: "typing_status" }, ({ payload }) => {
+      if (!payload || payload.receiver !== cleanUser) return;
+      setTypingMap((prev) => ({ ...prev, [payload.sender]: payload.isTyping }));
     });
 
     channel.subscribe(async (status) => {
@@ -564,6 +639,31 @@ export default function ChatPage() {
     }
   }
 
+  // YAZIYOR SİNYALİ GÖNDERME
+  function handleTextChange(val: string) {
+    setText(val);
+    if (!currentUser || !activeChat || activeChat.isGroup) return;
+
+    if (signalChannelRef.current) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "typing_status",
+        payload: { sender: currentUser.toLowerCase().trim(), receiver: activeChat.name.toLowerCase().trim(), isTyping: true }
+      });
+    }
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      if (signalChannelRef.current && currentUser && activeChat) {
+        signalChannelRef.current.send({
+          type: "broadcast",
+          event: "typing_status",
+          payload: { sender: currentUser.toLowerCase().trim(), receiver: activeChat.name.toLowerCase().trim(), isTyping: false }
+        });
+      }
+    }, 2000);
+  }
+
   useEffect(() => {
     if (localVideoRef.current && localStreamState && isVideoCall) {
       localVideoRef.current.srcObject = localStreamState;
@@ -606,8 +706,9 @@ export default function ChatPage() {
       loadGroupMessages(activeChat.id);
     } else {
       loadDirectMessages(currentUser, activeChat.name);
+      sendReadReceipt(activeChat.name);
     }
-  }, [currentUser, activeChat, loadDirectMessages, loadGroupMessages]);
+  }, [currentUser, activeChat, loadDirectMessages, loadGroupMessages, sendReadReceipt]);
 
   useEffect(() => { 
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
@@ -663,13 +764,15 @@ export default function ChatPage() {
     }
   }
 
-  // MESAJ GÖNDERME: ASLA SİLİNMEYEN HİBRİT YAPI
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
     const content = isAudio ? audioBase64 : text.trim();
     if (!content) return;
     if (!isAudio) { setText(""); setShowEmojiPicker(false); }
+
+    // Karşı taraf şu anda online mı?
+    const isPartnerOnline = !activeChat.isGroup && presenceMap[activeChat.name?.toLowerCase()]?.online;
 
     const newMsg = {
       sender: currentUser,
@@ -678,13 +781,13 @@ export default function ChatPage() {
       content: content,
       message_type: isAudio ? "audio" : "text",
       created_at: new Date().toISOString(),
-      isGroup: activeChat.isGroup
+      isGroup: activeChat.isGroup,
+      is_delivered: isPartnerOnline || false,
+      is_read: false
     };
 
-    // 1. Ekrana hemen birleştirerek ekle
     setMessages((prev) => mergeMessageLists(prev, [newMsg]));
 
-    // 2. Yerel depoya kaydet
     const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
     saveMessageToStorage(currentUser, targetId, activeChat.isGroup, newMsg);
 
@@ -692,7 +795,6 @@ export default function ChatPage() {
       addChatPartner(activeChat.name);
     }
 
-    // 3. Karşı tarafa WebSocket ile fırlat
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -701,7 +803,6 @@ export default function ChatPage() {
       });
     }
 
-    // 4. Supabase'e yaz
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -999,11 +1100,15 @@ export default function ChatPage() {
   }, [currentChatTimerHours, messages]);
 
   function getUserOnlineStatus(username: string) {
+    const isTyping = typingMap[username?.toLowerCase()];
+    if (isTyping) {
+      return { text: "yazıyor...", isOnline: true, isTyping: true };
+    }
     const info = presenceMap[username?.toLowerCase()];
     if (info && info.online) {
-      return { text: "Çevrim İçi 🟢", isOnline: true };
+      return { text: "Çevrim İçi 🟢", isOnline: true, isTyping: false };
     }
-    return { text: "Çevrim Dışı", isOnline: false };
+    return { text: "Çevrim Dışı", isOnline: false, isTyping: false };
   }
 
   return (
@@ -1155,13 +1260,13 @@ export default function ChatPage() {
                     <div className="flex items-center gap-1.5">
                       {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
                       <button onClick={(e) => togglePin(u.username, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
-                      <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
+                      <span className={`text-[9px] ${statusInfo.isTyping ? "text-[#14F195] font-bold animate-pulse" : statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
                         {statusInfo.text}
                       </span>
                     </div>
                   </div>
                   <p className="text-[10px] text-gray-400 truncate">
-                    {u.wallet_address ? `${u.wallet_address.slice(0, 4)}...${u.wallet_address.slice(-4)}` : "Solana Cüzdanı"}
+                    {statusInfo.isTyping ? "yazıyor..." : u.wallet_address ? `${u.wallet_address.slice(0, 4)}...${u.wallet_address.slice(-4)}` : "Solana Cüzdanı"}
                   </p>
                 </div>
               </div>
@@ -1191,7 +1296,7 @@ export default function ChatPage() {
                 <div className="min-w-0">
                   <h2 className="text-xs font-bold text-white truncate leading-tight">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
                   <div className="flex items-center gap-1 truncate">
-                    <span className="text-[9px] sm:text-[10px] text-[#14F195] truncate">
+                    <span className={`text-[9px] sm:text-[10px] truncate ${getUserOnlineStatus(activeChat.name).isTyping ? "text-[#14F195] font-bold animate-pulse" : "text-[#14F195]"}`}>
                       {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
                     </span>
                     {currentChatTimerHours > 0 && (
@@ -1227,7 +1332,7 @@ export default function ChatPage() {
               </div>
             </div>
 
-            {/* MESAJLAR LİSTESİ */}
+            {/* MESAJLAR LİSTESİ (GERÇEK ZAMANLI MAVİ TIK EKLENTİLİ) */}
             <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative flex flex-col">
               <div className="flex justify-center my-0.5">
                 <div className="py-1 px-3 bg-[#1e293b]/90 border border-[#14F195]/30 rounded-full text-[10px] shadow-sm flex items-center gap-2 backdrop-blur-md">
@@ -1251,8 +1356,20 @@ export default function ChatPage() {
                       ) : (
                         <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>
                       )}
-                      <div className="text-[8.5px] sm:text-[9px] text-gray-300/70 text-right mt-0.5">
-                        {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      <div className="flex items-center justify-end gap-1 text-[8.5px] sm:text-[9px] text-gray-300/70 mt-0.5">
+                        <span>{new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                        {/* 3 KADEMELİ TIK SİSTEMİ (Tek Gri / Çift Gri / Çift Mavi) */}
+                        {isMe && !activeChat.isGroup && (
+                          <span className="text-[11px] leading-none select-none">
+                            {m.is_read ? (
+                              <span className="text-[#38bdf8] font-bold" title="Görüldü">✓✓</span>
+                            ) : m.is_delivered ? (
+                              <span className="text-gray-300 font-semibold" title="İletildi">✓✓</span>
+                            ) : (
+                              <span className="text-gray-400" title="Gönderildi">✓</span>
+                            )}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1278,7 +1395,13 @@ export default function ChatPage() {
                 <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-2xl text-base sm:text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
                   😊
                 </button>
-                <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3 py-2 sm:py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" />
+                <input 
+                  type="text" 
+                  value={text} 
+                  onChange={(e) => handleTextChange(e.target.value)} 
+                  placeholder="Mesajınızı yazın..." 
+                  className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3 py-2 sm:py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" 
+                />
                 <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2 sm:p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">
                   {isRecordingAudio ? "⏹️" : "🎙️"}
                 </button>
