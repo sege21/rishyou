@@ -96,7 +96,6 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
-  // WEBRTC VE SES REFERANSLARI
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
@@ -109,6 +108,7 @@ export default function ChatPage() {
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   
+  const activeChatRef = useRef<any>(null);
   const currentCallPartnerRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -126,6 +126,10 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    activeChatRef.current = activeChat;
+  }, [activeChat]);
+
+  useEffect(() => {
     const user = sessionStorage.getItem("rishyou_username");
     if (!user) {
       router.push("/");
@@ -135,7 +139,7 @@ export default function ChatPage() {
       loadGroups(user);
       loadWalletData(user);
       loadChatPartners(user);
-      initRealtimeSignaling(user);
+      initRealtimeHub(user);
 
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
@@ -195,17 +199,8 @@ export default function ChatPage() {
 
     if (activeChat.isGroup) {
       loadGroupMessages(activeChat.id);
-      const channel = supabase.channel(`group_${activeChat.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "group_messages", filter: `group_id=eq.${activeChat.id}` }, (payload) => { setMessages((prev) => [...prev, payload.new]); }).subscribe();
-      return () => { supabase.removeChannel(channel); };
     } else {
       loadDirectMessages(currentUser, activeChat.name);
-      const channel = supabase.channel(`chat_${currentUser}_${activeChat.name}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => {
-          const msg = payload.new;
-          if ((msg.sender === currentUser && msg.receiver === activeChat.name) || (msg.sender === activeChat.name && msg.receiver === currentUser)) {
-            setMessages((prev) => [...prev, msg]);
-          }
-        }).subscribe();
-      return () => { supabase.removeChannel(channel); };
     }
   }, [currentUser, activeChat]);
 
@@ -253,9 +248,81 @@ export default function ChatPage() {
     }
   }
 
-  async function loadDirectMessages(u1: string, u2: string) { const { data } = await supabase.from("messages").select("*").or(`and(sender.eq.${u1},receiver.eq.${u2}),and(sender.eq.${u2},receiver.eq.${u1})`).order("created_at", { ascending: true }); if (data) setMessages(data); }
-  async function loadGroupMessages(groupId: string) { const { data } = await supabase.from("group_messages").select("*").eq("group_id", groupId).order("created_at", { ascending: true }); if (data) setMessages(data); }
+  async function loadDirectMessages(u1: string, u2: string) { 
+    const { data } = await supabase.from("messages").select("*").or(`and(sender.eq.${u1},receiver.eq.${u2}),and(sender.eq.${u2},receiver.eq.${u1})`).order("created_at", { ascending: true }); 
+    if (data) setMessages(data); 
+  }
+  async function loadGroupMessages(groupId: string) { 
+    const { data } = await supabase.from("group_messages").select("*").eq("group_id", groupId).order("created_at", { ascending: true }); 
+    if (data) setMessages(data); 
+  }
 
+  // ANLIK REALTIME MERKEZİ (HEM ARAMA HEM MESAJLAR İÇİN 0MS WEBSOCKET)
+  function initRealtimeHub(username: string) {
+    const channel = supabase.channel(`rishyou_realtime_hub`, {
+      config: { broadcast: { self: false } }
+    });
+
+    // 1. Arama Sinyalleri
+    channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
+      if (!payload || payload.receiver !== username) return;
+
+      if (payload.type === "offer") {
+        currentCallPartnerRef.current = payload.sender;
+        setIncomingCall(payload);
+      } else if (payload.type === "answer" && peerConnectionRef.current) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
+        setCallStatus("Ses Hattı Bağlandı 🟢");
+        while (iceCandidateQueue.current.length > 0) {
+          const candidate = iceCandidateQueue.current.shift();
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
+        }
+      } else if (payload.type === "candidate") {
+        const candidate = JSON.parse(payload.payload);
+        if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+        } else {
+          iceCandidateQueue.current.push(candidate);
+        }
+      } else if (payload.type === "end") {
+        cleanupCall();
+      }
+    });
+
+    // 2. Anlık Mesaj Alımı (Broadcast)
+    channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
+      if (!payload) return;
+      const cur = activeChatRef.current;
+
+      if (payload.isGroup) {
+        if (cur?.isGroup && cur.id === payload.group_id) {
+          setMessages((prev) => [...prev, payload]);
+        }
+      } else {
+        if (payload.receiver === username) {
+          if (cur && !cur.isGroup && cur.name === payload.sender) {
+            setMessages((prev) => [...prev, payload]);
+          }
+          setActiveChatPartners((prev) => prev.includes(payload.sender) ? prev : [...prev, payload.sender]);
+        }
+      }
+    });
+
+    channel.subscribe();
+    signalChannelRef.current = channel;
+  }
+
+  function sendSignal(receiver: string, type: string, payload: string) {
+    if (signalChannelRef.current) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { sender: currentUser, receiver, type, payload }
+      });
+    }
+  }
+
+  // ANLIK VE KESİNTİSİZ MESAJ GÖNDERME FONKSİYONU
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -263,11 +330,52 @@ export default function ChatPage() {
     if (!content) return;
     if (!isAudio) { setText(""); setShowEmojiPicker(false); }
 
-    if (activeChat.isGroup) {
-      await supabase.from("group_messages").insert([{ group_id: activeChat.id, sender: currentUser, content: content, message_type: isAudio ? "audio" : "text", created_at: new Date().toISOString() }]);
-    } else {
-      await supabase.from("messages").insert([{ sender: currentUser, receiver: activeChat.name, content: content, message_type: isAudio ? "audio" : "text", created_at: new Date().toISOString() }]);
-      if (!activeChatPartners.includes(activeChat.name)) setActiveChatPartners((prev) => [...prev, activeChat.name]);
+    const newMsg = {
+      sender: currentUser,
+      receiver: activeChat.isGroup ? null : activeChat.name,
+      group_id: activeChat.isGroup ? activeChat.id : null,
+      content: content,
+      message_type: isAudio ? "audio" : "text",
+      created_at: new Date().toISOString(),
+      isGroup: activeChat.isGroup
+    };
+
+    // 1. Kendi ekranında salisesinde göster (Optimistic UI)
+    setMessages((prev) => [...prev, newMsg]);
+
+    // 2. Karşı tarafın ekranına 0ms hızla WebSocket ile ilet
+    if (signalChannelRef.current) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "new_chat_msg",
+        payload: newMsg
+      });
+    }
+
+    // 3. Veritabanına kalıcı olarak kaydet
+    try {
+      if (activeChat.isGroup) {
+        await supabase.from("group_messages").insert([{
+          group_id: activeChat.id,
+          sender: currentUser,
+          content: content,
+          message_type: isAudio ? "audio" : "text",
+          created_at: newMsg.created_at
+        }]);
+      } else {
+        await supabase.from("messages").insert([{
+          sender: currentUser,
+          receiver: activeChat.name,
+          content: content,
+          message_type: isAudio ? "audio" : "text",
+          created_at: newMsg.created_at
+        }]);
+        if (!activeChatPartners.includes(activeChat.name)) {
+          setActiveChatPartners((prev) => [...prev, activeChat.name]);
+        }
+      }
+    } catch (e) {
+      console.error("Veritabanı kayıt hatası:", e);
     }
   }
 
@@ -305,51 +413,6 @@ export default function ChatPage() {
         setSelectedMembers([]);
       }
     } catch (err: any) { alert("Grup hatası: " + err.message); }
-  }
-
-  // YENİ BROADCAST SİNYAL ALTYAPISI (Milisaniyelik İletim)
-  function initRealtimeSignaling(username: string) {
-    const channel = supabase.channel(`webrtc_signaling_room`, {
-      config: { broadcast: { self: false } }
-    });
-
-    channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
-      if (!payload || payload.receiver !== username) return;
-
-      if (payload.type === "offer") {
-        currentCallPartnerRef.current = payload.sender;
-        setIncomingCall(payload);
-      } else if (payload.type === "answer" && peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
-        setCallStatus("Ses Hattı Bağlandı 🟢");
-        while (iceCandidateQueue.current.length > 0) {
-          const candidate = iceCandidateQueue.current.shift();
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
-        }
-      } else if (payload.type === "candidate") {
-        const candidate = JSON.parse(payload.payload);
-        if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
-        } else {
-          iceCandidateQueue.current.push(candidate);
-        }
-      } else if (payload.type === "end") {
-        cleanupCall();
-      }
-    });
-
-    channel.subscribe();
-    signalChannelRef.current = channel;
-  }
-
-  function sendSignal(receiver: string, type: string, payload: string) {
-    if (signalChannelRef.current) {
-      signalChannelRef.current.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { sender: currentUser, receiver, type, payload }
-      });
-    }
   }
 
   function createPeerConnection(targetUser: string) {
@@ -486,7 +549,6 @@ export default function ChatPage() {
     }
   }
 
-  // DONANIMI KÖKTEN KAPATAN GÜÇLÜ KİLİT
   function cleanupCall() {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => {
