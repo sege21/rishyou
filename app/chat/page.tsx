@@ -147,39 +147,47 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  function getChatStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
-    return isGroup ? `rishyou_chat_grp_${partnerOrGroupId}` : `rishyou_chat_dm_${[user, partnerOrGroupId].sort().join("_")}`;
-  }
-
-  function saveMessageToStorage(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
+  // BULUT KULLANICI PROFİL SENKRONİZASYONU (Her Cihazda Birebir Eşitlenir)
+  async function syncUserDataToCloud(username: string, updates: Partial<{
+    pinned_chats: string[];
+    locked_chats: string[];
+    chat_timers: Record<string, number>;
+    vault_notes: string[];
+    settings: any;
+  }>) {
     try {
-      const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
-      const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
-      const idx = existing.findIndex(
-        (m) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
-      );
-      if (idx >= 0) {
-        existing[idx] = { ...existing[idx], ...msg };
-      } else {
-        existing.push(msg);
-      }
-      localStorage.setItem(key, JSON.stringify(existing));
+      await supabase.from("user_data").upsert({
+        username,
+        ...updates,
+        updated_at: new Date().toISOString()
+      });
     } catch {}
   }
 
-  function getMessagesFromStorage(user: string, partnerOrGroupId: string, isGroup: boolean): any[] {
+  async function loadUserDataFromCloud(username: string) {
     try {
-      const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
-      return JSON.parse(localStorage.getItem(key) || "[]");
-    } catch {
-      return [];
-    }
+      const { data } = await supabase.from("user_data").select("*").eq("username", username).single();
+      if (data) {
+        if (data.pinned_chats) setPinnedChats(data.pinned_chats);
+        if (data.locked_chats) setLockedChats(data.locked_chats);
+        if (data.chat_timers) setChatTimers(data.chat_timers);
+        if (data.vault_notes) setVaultNotes(data.vault_notes);
+        if (data.settings) {
+          const s = data.settings;
+          if (s.hideOnline !== undefined) setHideOnline(s.hideOnline);
+          if (s.disableReadReceipts !== undefined) setDisableReadReceipts(s.disableReadReceipts);
+          if (s.screenshotProtection !== undefined) setScreenshotProtection(s.screenshotProtection);
+          if (s.soundEnabled !== undefined) setSoundEnabled(s.soundEnabled);
+          if (s.appPin !== undefined) setAppPin(s.appPin);
+          if (s.lang !== undefined) setLang(s.lang);
+        }
+      }
+    } catch {}
   }
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     if (!chat) {
       setActiveChat(null);
-      if (currentUser) localStorage.removeItem(`rishyou_last_active_${currentUser}`);
       return;
     }
 
@@ -193,30 +201,71 @@ export default function ChatPage() {
     }
 
     setActiveChat(chat);
-    if (currentUser) {
-      localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(chat));
-      if (!chat.isGroup) {
-        addChatPartner(chat.name);
-      }
+    if (!chat.isGroup && currentUser) {
+      addChatPartner(chat.name);
     }
 
-    // Karşı tarafa okundu bilgisi gönder
+    // Okundu bilgisi (Mavi tık) tetikle
     if (signalChannelRef.current && currentUser && !disableReadReceipts) {
       signalChannelRef.current.send({
         type: "broadcast",
         event: "read_receipt",
-        payload: { reader: currentUser, partner: chat.name, isGroup: chat.isGroup, groupId: chat.id }
+        payload: { reader: currentUser, partner: chat.name }
       });
     }
   }
 
   function toggleLockChat(id: string, e: React.MouseEvent) {
     e.stopPropagation();
-    setLockedChats((prev) => {
-      const updated = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      if (currentUser) localStorage.setItem(`rishyou_locked_${currentUser}`, JSON.stringify(updated));
-      return updated;
-    });
+    const updated = lockedChats.includes(id) ? lockedChats.filter((x) => x !== id) : [...lockedChats, id];
+    setLockedChats(updated);
+    if (currentUser) syncUserDataToCloud(currentUser, { locked_chats: updated });
+  }
+
+  function togglePin(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    const updated = pinnedChats.includes(id) ? pinnedChats.filter((x) => x !== id) : [...pinnedChats, id];
+    setPinnedChats(updated);
+    if (currentUser) syncUserDataToCloud(currentUser, { pinned_chats: updated });
+  }
+
+  function setAutoDeleteForCurrentChat(hours: number) {
+    if (!currentUser || !activeChat) return;
+    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name;
+    const updated = { ...chatTimers, [chatKey]: hours };
+    setChatTimers(updated);
+    syncUserDataToCloud(currentUser, { chat_timers: updated });
+    setChatTimerModalOpen(false);
+  }
+
+  function saveVaultNote() {
+    if (!newVaultNote.trim() || !currentUser) return;
+    const updated = [newVaultNote.trim(), ...vaultNotes];
+    setVaultNotes(updated);
+    syncUserDataToCloud(currentUser, { vault_notes: updated });
+    setNewVaultNote("");
+  }
+
+  function saveUserSettings(updated: any) {
+    if (!currentUser) return;
+    const newSettings = {
+      hideOnline,
+      disableReadReceipts,
+      screenshotProtection,
+      soundEnabled,
+      appPin,
+      lang,
+      ...updated
+    };
+    syncUserDataToCloud(currentUser, { settings: newSettings });
+
+    if (updated.hideOnline !== undefined && signalChannelRef.current) {
+      signalChannelRef.current.track({
+        username: currentUser,
+        online_at: new Date().toISOString(),
+        hideOnline: updated.hideOnline
+      });
+    }
   }
 
   function handlePinSubmit() {
@@ -226,7 +275,6 @@ export default function ChatPage() {
       setEnteredPin("");
       if (pendingLockedChat) {
         setActiveChat(pendingLockedChat);
-        if (currentUser) localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(pendingLockedChat));
         setPendingLockedChat(null);
       }
     } else {
@@ -236,79 +284,21 @@ export default function ChatPage() {
   }
 
   function addChatPartner(partnerName: string) {
-    if (!currentUser) return;
-    setActiveChatPartners((prev) => {
-      if (!prev.includes(partnerName)) {
-        const updated = [partnerName, ...prev];
-        localStorage.setItem(`rishyou_partners_${currentUser}`, JSON.stringify(updated));
-        return updated;
-      }
-      return prev;
-    });
+    setActiveChatPartners((prev) => (prev.includes(partnerName) ? prev : [partnerName, ...prev]));
   }
 
   useEffect(() => {
-    const user = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_saved_username");
+    const user = sessionStorage.getItem("rishyou_username");
     if (!user) {
       router.push("/");
     } else {
       setCurrentUser(user);
-      localStorage.setItem("rishyou_saved_username", user);
-
       loadUsers(user);
       loadGroups(user);
       loadWalletData(user);
       loadChatPartners(user);
-
-      const savedPartners = localStorage.getItem(`rishyou_partners_${user}`);
-      if (savedPartners) {
-        try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
-      }
-
-      const savedLocked = localStorage.getItem(`rishyou_locked_${user}`);
-      if (savedLocked) {
-        try { setLockedChats(JSON.parse(savedLocked)); } catch {}
-      }
-
-      const lastActive = localStorage.getItem(`rishyou_last_active_${user}`);
-      if (lastActive) {
-        try {
-          const parsed = JSON.parse(lastActive);
-          const chatId = parsed.isGroup ? `grp_${parsed.id}` : parsed.name;
-          const isLocked = savedLocked ? JSON.parse(savedLocked).includes(chatId) : false;
-          if (!isLocked) setActiveChat(parsed);
-        } catch {}
-      }
-
-      const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
-      if (savedVault) setVaultNotes(JSON.parse(savedVault));
-
-      const savedPins = localStorage.getItem(`rishyou_pins_${user}`);
-      if (savedPins) setPinnedChats(JSON.parse(savedPins));
-
-      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user}`);
-      if (savedTimers) {
-        try { setChatTimers(JSON.parse(savedTimers)); } catch {}
-      }
-
-      let userHideOnline = false;
-      const savedSettings = localStorage.getItem(`rishyou_settings_${user}`);
-      if (savedSettings) {
-        try {
-          const parsed = JSON.parse(savedSettings);
-          if (parsed.hideOnline !== undefined) {
-            setHideOnline(parsed.hideOnline);
-            userHideOnline = parsed.hideOnline;
-          }
-          if (parsed.disableReadReceipts !== undefined) setDisableReadReceipts(parsed.disableReadReceipts);
-          if (parsed.screenshotProtection !== undefined) setScreenshotProtection(parsed.screenshotProtection);
-          if (parsed.soundEnabled !== undefined) setSoundEnabled(parsed.soundEnabled);
-          if (parsed.appPin !== undefined) setAppPin(parsed.appPin);
-          if (parsed.lang !== undefined) setLang(parsed.lang);
-        } catch {}
-      }
-
-      initRealtimeHub(user, userHideOnline);
+      loadUserDataFromCloud(user);
+      initRealtimeHub(user, hideOnline);
     }
 
     const tpsInterval = setInterval(() => {
@@ -320,37 +310,6 @@ export default function ChatPage() {
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
   }, [router]);
-
-  function setAutoDeleteForCurrentChat(hours: number) {
-    if (!currentUser || !activeChat) return;
-    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name;
-    const updated = { ...chatTimers, [chatKey]: hours };
-    setChatTimers(updated);
-    localStorage.setItem(`rishyou_chat_timers_${currentUser}`, JSON.stringify(updated));
-    setChatTimerModalOpen(false);
-  }
-
-  function saveUserSettings(updated: any) {
-    if (!currentUser) return;
-    const settings = {
-      hideOnline,
-      disableReadReceipts,
-      screenshotProtection,
-      soundEnabled,
-      appPin,
-      lang,
-      ...updated
-    };
-    localStorage.setItem(`rishyou_settings_${currentUser}`, JSON.stringify(settings));
-
-    if (updated.hideOnline !== undefined && signalChannelRef.current) {
-      signalChannelRef.current.track({
-        username: currentUser,
-        online_at: new Date().toISOString(),
-        hideOnline: updated.hideOnline
-      });
-    }
-  }
 
   useEffect(() => {
     if (localVideoRef.current && localStreamState && isVideoCall) {
@@ -388,6 +347,7 @@ export default function ChatPage() {
     }
   }, [callStatus, soundEnabled]);
 
+  // SOHBET DEĞİŞİNCE MESAJLARI BULUTTAN ÇEK
   useEffect(() => {
     if (!currentUser || !activeChat) return;
 
@@ -400,15 +360,6 @@ export default function ChatPage() {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-  function togglePin(id: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    setPinnedChats(prev => {
-      const updated = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
-      localStorage.setItem(`rishyou_pins_${currentUser}`, JSON.stringify(updated));
-      return updated;
-    });
-  }
-
   async function loadUsers(current: string) { 
     try {
       const { data } = await supabase.from("users").select("username, wallet_address").neq("username", current); 
@@ -420,14 +371,12 @@ export default function ChatPage() {
     try {
       const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.eq.${current},receiver.eq.${current}`);
       if (data) {
-        const partners = new Set<string>(activeChatPartners);
+        const partners = new Set<string>();
         data.forEach((m) => { 
           if (m.sender !== current) partners.add(m.sender); 
           if (m.receiver !== current) partners.add(m.receiver); 
         });
-        const arr = Array.from(partners);
-        setActiveChatPartners(arr);
-        localStorage.setItem(`rishyou_partners_${current}`, JSON.stringify(arr));
+        setActiveChatPartners(Array.from(partners));
       }
     } catch {}
   }
@@ -445,10 +394,8 @@ export default function ChatPage() {
     } catch {}
   }
 
+  // BULUTTAN TÜM CİHAZLAR İÇİN DİREKT MESAJ ÇEKİCİ (400 HATASIZ)
   async function loadDirectMessages(u1: string, u2: string) { 
-    const localMsgs = getMessagesFromStorage(u1, u2, false);
-    setMessages(localMsgs);
-
     try {
       const { data, error } = await supabase
         .from("messages")
@@ -460,17 +407,10 @@ export default function ChatPage() {
         const filtered = data.filter(
           (m: any) => (m.sender === u1 && m.receiver === u2) || (m.sender === u2 && m.receiver === u1)
         );
-        
-        const mergedMap = new Map();
-        [...localMsgs, ...filtered].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
-          mergedMap.set(key, m);
-          saveMessageToStorage(u1, u2, false, m);
-        });
-        setMessages(Array.from(mergedMap.values()));
+        setMessages(filtered);
       }
     } catch (e) {
-      console.error("Supabase sync:", e);
+      console.error("Mesaj yükleme hatası:", e);
     }
   }
 
@@ -481,9 +421,6 @@ export default function ChatPage() {
       return;
     }
 
-    const localMsgs = getMessagesFromStorage(currentUser || "", groupId, true);
-    setMessages(localMsgs);
-
     try {
       const { data, error } = await supabase
         .from("group_messages")
@@ -492,16 +429,10 @@ export default function ChatPage() {
         .order("created_at", { ascending: true }); 
       
       if (!error && data) {
-        const mergedMap = new Map();
-        [...localMsgs, ...data].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
-          mergedMap.set(key, m);
-          if (currentUser) saveMessageToStorage(currentUser, groupId, true, m);
-        });
-        setMessages(Array.from(mergedMap.values()));
+        setMessages(data);
       }
     } catch (e) {
-      console.error("Grup sync:", e);
+      console.error("Grup mesaj hatası:", e);
     }
   }
 
@@ -571,28 +502,23 @@ export default function ChatPage() {
       }
     });
 
-    // MESAJ ALIMI & TIK SENKRONİZASYONU
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
 
       if (payload.isGroup) {
-        saveMessageToStorage(username, payload.group_id, true, payload);
         const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
         if (isMember && cur?.isGroup && cur.id === payload.group_id) {
           setMessages((prev) => [...prev, payload]);
         }
       } else {
         if (payload.receiver === username) {
+          addChatPartner(payload.sender);
           const isCurrentlyOpen = cur && !cur.isGroup && cur.name === payload.sender;
           const msgWithStatus = { ...payload, is_read: isCurrentlyOpen, status: isCurrentlyOpen ? "read" : "delivered" };
 
-          saveMessageToStorage(username, payload.sender, false, msgWithStatus);
-          addChatPartner(payload.sender);
-
           if (isCurrentlyOpen) {
             setMessages((prev) => [...prev, msgWithStatus]);
-            // Gönderene anında Mavi Tık sinyali gönder
             if (signalChannelRef.current && !disableReadReceipts) {
               signalChannelRef.current.send({
                 type: "broadcast",
@@ -605,22 +531,11 @@ export default function ChatPage() {
       }
     });
 
-    // MAVİ TIK (READ RECEIPT) YAKALAYICI
     channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
       if (!payload || payload.partner !== username) return;
-      const reader = payload.reader;
-
       setMessages((prev) =>
         prev.map((m) => (m.sender === username ? { ...m, is_read: true, status: "read" } : m))
       );
-
-      // Depodaki mesajları mavi tık yap
-      try {
-        const key = getChatStorageKey(username, reader, false);
-        const stored = JSON.parse(localStorage.getItem(key) || "[]");
-        const updated = stored.map((m: any) => (m.sender === username ? { ...m, is_read: true, status: "read" } : m));
-        localStorage.setItem(key, JSON.stringify(updated));
-      } catch {}
     });
 
     channel.subscribe(async (status) => {
@@ -646,6 +561,7 @@ export default function ChatPage() {
     }
   }
 
+  // BULUTA VE EKRANA ANLIK MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -668,9 +584,6 @@ export default function ChatPage() {
     };
 
     setMessages((prev) => [...prev, newMsg]);
-
-    const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
-    saveMessageToStorage(currentUser, targetId, activeChat.isGroup, newMsg);
 
     if (!activeChat.isGroup) {
       addChatPartner(activeChat.name);
@@ -699,6 +612,8 @@ export default function ChatPage() {
           receiver: activeChat.name,
           content: content,
           message_type: isAudio ? "audio" : "text",
+          status: newMsg.status,
+          is_read: false,
           created_at: newMsg.created_at
         }]);
       }
@@ -950,8 +865,6 @@ export default function ChatPage() {
 
   function handleLogout() {
     sessionStorage.removeItem("rishyou_username");
-    localStorage.removeItem("rishyou_saved_username");
-    if (currentUser) localStorage.removeItem(`rishyou_last_active_${currentUser}`);
     router.push("/");
   }
 
@@ -962,15 +875,6 @@ export default function ChatPage() {
     setStoryModalOpen(false);
   }
 
-  function saveVaultNote() {
-    if (!newVaultNote.trim() || !currentUser) return;
-    const updated = [newVaultNote.trim(), ...vaultNotes];
-    setVaultNotes(updated);
-    localStorage.setItem(`rishyou_vault_${currentUser}`, JSON.stringify(updated));
-    setNewVaultNote("");
-  }
-
-  // FİLTRELEME & GİZLİ SOHBET KONTROLÜ
   const visibleUsers = searchQuery.trim()
     ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
     : users.filter((u) => {
@@ -1099,12 +1003,12 @@ export default function ChatPage() {
             <div className="w-9 h-9 rounded-xl bg-[#17212b] flex items-center justify-center text-base shadow border border-white/5">🔒</div>
             <div className="min-w-0 flex-1">
               <h4 className="text-xs font-bold text-white group-hover:text-[#14F195] transition-colors">Kişisel Kasa</h4>
-              <p className="text-[10px] text-gray-400 truncate">Size özel şifreler, anahtarlar ve notlar</p>
+              <p className="text-[10px] text-gray-400 truncate">Her cihazda eşitlenen özel notlar</p>
             </div>
           </div>
         </div>
 
-        {/* SEKME FİLTRELERİ (GİZLİ SOHBETLER / PIN KORUMALI) */}
+        {/* SEKME FİLTRELERİ */}
         <div className="flex px-3 pt-2.5 gap-1">
           <button onClick={() => setTabFilter("all")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "all" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Tümü</button>
           <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gelen</button>
@@ -1256,7 +1160,7 @@ export default function ChatPage() {
               </div>
             </div>
 
-            {/* MESAJLAR VE TIK SİSTEMİ */}
+            {/* MESAJLAR VE MAVİ TIK SİSTEMİ */}
             <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative flex flex-col">
               <div className="flex justify-center my-0.5">
                 <div className="py-1 px-3 bg-[#1e293b]/90 border border-[#14F195]/30 rounded-full text-[10px] shadow-sm flex items-center gap-2 backdrop-blur-md">
@@ -1343,7 +1247,7 @@ export default function ChatPage() {
         )}
       </main>
 
-      {/* PIN GİRİŞ MODALI (GİZLİ SOHBET KİLİT AÇMA) */}
+      {/* PIN GİRİŞ MODALI */}
       {pinPromptModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/85 backdrop-blur-md">
           <div className="w-full max-w-xs bg-[#17212b] border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3 text-center">
