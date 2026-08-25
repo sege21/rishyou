@@ -200,16 +200,17 @@ export default function ChatPage() {
     disableReadReceiptsRef.current = disableReadReceipts;
   }, [disableReadReceipts]);
 
+  // ASLA MESAJ SİLMEYEN AKILLI BİRLEŞTİRME MOTORU
   const mergeMessageLists = useCallback((currentList: any[], incomingList: any[]) => {
     const map = new Map<string, any>();
     
     currentList.forEach((m) => {
-      const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase()}_${m.created_at}_${m.content}`;
+      const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase().trim()}_${m.created_at}_${m.content}`;
       map.set(key, m);
     });
 
     incomingList.forEach((m) => {
-      const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase()}_${m.created_at}_${m.content}`;
+      const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase().trim()}_${m.created_at}_${m.content}`;
       const existing = map.get(key);
       if (existing) {
         map.set(key, { ...existing, ...m, is_read: m.is_read || existing.is_read, is_delivered: m.is_delivered || existing.is_delivered });
@@ -237,13 +238,11 @@ export default function ChatPage() {
     });
   }, [currentUser]);
 
-  // GÖRÜLDÜ VE OKUNDU BİLDİRİMİNİ BULUTA VE WEBSOCKET'E YAZ
   const sendReadReceipt = useCallback(async (partnerName: string) => {
     if (!currentUser || !partnerName || disableReadReceiptsRef.current) return;
     const cleanUser = currentUser.toLowerCase().trim();
     const cleanPartner = partnerName.toLowerCase().trim();
 
-    // 1. WebSocket ile fırlat
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -252,7 +251,6 @@ export default function ChatPage() {
       });
     }
 
-    // 2. Supabase üzerinde okundu olarak güncelle
     try {
       await supabase
         .from("messages")
@@ -264,6 +262,7 @@ export default function ChatPage() {
 
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
+    setMessages([]);
     if (chat && currentUser) {
       try { localStorage.setItem(`rishyou_last_active_${currentUser.toLowerCase()}`, JSON.stringify(chat)); } catch {}
       if (!chat.isGroup) {
@@ -275,7 +274,6 @@ export default function ChatPage() {
     }
   }
 
-  // BULUTTAN %100 HATASIZ DİREKT MESAJ ÇEKME (Gizli sekme ve tüm cihazlarla tam uyumlu)
   const loadDirectMessages = useCallback(async (u1: string, u2: string) => {
     if (!u1 || !u2) return;
     try {
@@ -292,12 +290,12 @@ export default function ChatPage() {
           const r = (m.receiver || "").toLowerCase().trim();
           return (s === user1 && r === user2) || (s === user2 && r === user1);
         });
-        setMessages(filtered);
+        setMessages((prev) => mergeMessageLists(prev, filtered));
       }
     } catch (e) {
       console.error("Bulut mesaj yükleme hatası:", e);
     }
-  }, []);
+  }, [mergeMessageLists]);
 
   const loadGroupMessages = useCallback(async (groupId: string) => {
     if (!groupId) return;
@@ -309,12 +307,12 @@ export default function ChatPage() {
         .order("created_at", { ascending: true });
 
       if (!error && data) {
-        setMessages(data);
+        setMessages((prev) => mergeMessageLists(prev, data));
       }
     } catch (e) {
       console.error("Grup mesaj hatası:", e);
     }
-  }, []);
+  }, [mergeMessageLists]);
 
   const loadChatPartners = useCallback(async (current: string) => {
     try {
@@ -417,7 +415,6 @@ export default function ChatPage() {
       }
     });
 
-    // 1. ANLIK MESAJ ALIMI & İLETİLDİ/GÖRÜLDÜ YANITI
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -431,14 +428,12 @@ export default function ChatPage() {
         if (payload.receiver?.toLowerCase().trim() === cleanUser) {
           addChatPartner(payload.sender);
 
-          // Karşı tarafa "mesaj bana ulaştı (iletildi)" sinyali gönder
           channel.send({
             type: "broadcast",
             event: "delivery_receipt",
             payload: { deliveredTo: cleanUser, sender: payload.sender?.toLowerCase().trim() }
           });
 
-          // Eğer şu an o kişiyle sohbet açıksa hemen "Görüldü (Mavi Tık)" sinyali gönder
           if (cur && !cur.isGroup && cur.name?.toLowerCase().trim() === payload.sender?.toLowerCase().trim()) {
             setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_read: true, is_delivered: true }]));
             if (!disableReadReceiptsRef.current) {
@@ -455,7 +450,6 @@ export default function ChatPage() {
       }
     });
 
-    // 2. İLETİLDİ SİNYALİ (Çift Gri Tık)
     channel.on("broadcast", { event: "delivery_receipt" }, ({ payload }) => {
       if (!payload || payload.sender !== cleanUser) return;
       setMessages((prev) =>
@@ -467,7 +461,6 @@ export default function ChatPage() {
       );
     });
 
-    // 3. GÖRÜLDÜ SİNYALİ (Çift Mavi Tık)
     channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
       if (!payload || payload.partner !== cleanUser) return;
       const reader = payload.reader;
@@ -480,7 +473,6 @@ export default function ChatPage() {
       );
     });
 
-    // 4. YAZIYOR SİNYALİ
     channel.on("broadcast", { event: "typing_status" }, ({ payload }) => {
       if (!payload || payload.receiver !== cleanUser) return;
       setTypingMap((prev) => ({ ...prev, [payload.sender]: payload.isTyping }));
@@ -554,21 +546,11 @@ export default function ChatPage() {
       setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
     }, 3000);
 
-    const mobileSyncInterval = setInterval(() => {
-      const cur = activeChatRef.current;
-      const user = sessionStorage.getItem("rishyou_username");
-      if (cur && user) {
-        if (cur.isGroup) loadGroupMessages(cur.id);
-        else loadDirectMessages(user, cur.name);
-      }
-    }, 2500);
-
     return () => {
       clearInterval(tpsInterval);
-      clearInterval(mobileSyncInterval);
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
-  }, [initRealtimeHub, loadChatPartners, loadDirectMessages, loadGroupMessages, router]);
+  }, [initRealtimeHub, loadChatPartners, router]);
 
   function setAutoDeleteForCurrentChat(hours: number) {
     if (!currentUser || !activeChat) return;
@@ -725,7 +707,6 @@ export default function ChatPage() {
     }
   }
 
-  // BULUTA VE EKRANA KALICI MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -1076,12 +1057,11 @@ export default function ChatPage() {
   return (
     <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans select-none">
       
-      {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
 
-      {/* SOL KENAR ÇUBUĞU (INBOX / SOHBET LİSTESİ) */}
+      {/* SOL KENAR ÇUBUĞU */}
       <aside className={`flex flex-col w-full md:w-80 lg:w-96 bg-[#17212b] border-r border-[#242f3d] flex-shrink-0 relative ${activeChat ? "hidden md:flex" : "flex"}`}>
         
         <div className="flex items-center justify-between p-3 border-b border-[#242f3d] bg-[#17212b] z-20 gap-1.5">
