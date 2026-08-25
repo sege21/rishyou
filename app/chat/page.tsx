@@ -18,6 +18,14 @@ const ICE_SERVERS: RTCConfiguration = {
 
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
 
+const HIGH_FIDELITY_AUDIO: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: false,
+  autoGainControl: false,
+  sampleRate: 48000,
+  channelCount: 1
+};
+
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -79,6 +87,8 @@ export default function ChatPage() {
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [storyModalOpen, setStoryModalOpen] = useState(false);
   const [activeStoryView, setActiveStoryView] = useState<any | null>(null);
+  const [callLogsModalOpen, setCallLogsModalOpen] = useState(false);
+  const [callLogs, setCallLogs] = useState<any[]>([]);
 
   const [chatTimerModalOpen, setChatTimerModalOpen] = useState(false);
   const [chatTimers, setChatTimers] = useState<Record<string, number>>({});
@@ -137,10 +147,10 @@ export default function ChatPage() {
   const iceCandidatesQueue = useRef<any[]>([]);
   const signalChannelRef = useRef<any>(null);
   const callTimerRef = useRef<any>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const callTimeoutTracker = useRef<any>(null);
 
-  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
-  const dialtoneRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const ringtoneIntervalRef = useRef<any>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -163,8 +173,11 @@ export default function ChatPage() {
     }
   }, []);
 
-  // Tarayıcı Ses Kilidini Kullanıcı Dokunuşunda Açma
-  function unlockAudioHardware() {
+  // ==========================================
+  // ÖZGÜN RISHYOU POLİFONİK MELODİ MOTORU
+  // ==========================================
+  function startCustomRishyouRingtone() {
+    if (!soundEnabled) return;
     try {
       if (!audioContextRef.current) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -173,19 +186,63 @@ export default function ChatPage() {
       if (audioContextRef.current && audioContextRef.current.state === "suspended") {
         audioContextRef.current.resume();
       }
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.play().catch(() => {});
-      }
+
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+
+      const playMelodyNote = (freq: number, startTime: number, duration: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, startTime);
+        gain.gain.setValueAtTime(0.001, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.2, startTime + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+
+      const playPhrase = () => {
+        const now = ctx.currentTime;
+        // Rishyou Özel Melodisi: E5, G#5, B5, E6, B5, G#5
+        playMelodyNote(659.25, now, 0.18);
+        playMelodyNote(830.61, now + 0.15, 0.18);
+        playMelodyNote(987.77, now + 0.30, 0.20);
+        playMelodyNote(1318.51, now + 0.48, 0.35);
+        playMelodyNote(987.77, now + 0.85, 0.20);
+        playMelodyNote(830.61, now + 1.05, 0.25);
+      };
+
+      playPhrase();
+      if (ringtoneIntervalRef.current) clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = setInterval(playPhrase, 2400);
     } catch {}
   }
 
-  function triggerPushNotification(title: string, body: string, isCall: boolean = false) {
+  function stopCustomRingtone() {
+    if (ringtoneIntervalRef.current) {
+      clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = null;
+    }
+  }
+
+  function triggerPushNotification(title: string, body: string, isCall: boolean = false, isMissed: boolean = false) {
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
       try {
         if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
-          navigator.serviceWorker.controller.postMessage({ title, body, type: isCall ? "call" : "msg" });
+          navigator.serviceWorker.controller.postMessage({
+            title,
+            body,
+            type: isCall ? "call" : isMissed ? "missed" : "msg"
+          });
         } else {
-          new Notification(title, { body, icon: "/favicon.ico", vibrate: isCall ? [600, 300, 600] : [200, 100] } as any);
+          new Notification(title, {
+            body,
+            icon: "/favicon.ico",
+            vibrate: isCall ? [600, 300, 600] : isMissed ? [300, 150, 300] : [200, 100]
+          } as any);
         }
       } catch {}
     }
@@ -203,6 +260,16 @@ export default function ChatPage() {
     return () => { if (callTimerRef.current) clearInterval(callTimerRef.current); };
   }, [isCallActive]);
 
+  // Arama / Çalma Durumunda Melodiyi Kontrol Et
+  useEffect(() => {
+    if (incomingCall || callStatus.includes("aranıyor")) {
+      startCustomRishyouRingtone();
+    } else {
+      stopCustomRingtone();
+    }
+    return () => stopCustomRingtone();
+  }, [incomingCall, callStatus]);
+
   function formatCallTime(seconds: number) {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -210,9 +277,7 @@ export default function ChatPage() {
   }
 
   function getStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
-    if (isGroup) return `rishyou_history_grp_${partnerOrGroupId}`;
-    const pair = [user, partnerOrGroupId].sort().join("_");
-    return `rishyou_history_dm_${pair}`;
+    return isGroup ? `rishyou_history_grp_${partnerOrGroupId}` : `rishyou_history_dm_${[user, partnerOrGroupId].sort().join("_")}`;
   }
 
   function saveMessageLocal(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
@@ -356,6 +421,19 @@ export default function ChatPage() {
     } catch {}
   }
 
+  async function loadCallLogs(username: string) {
+    try {
+      const { data } = await supabase
+        .from("call_logs")
+        .select("*")
+        .or(`caller.eq.${username},receiver.eq.${username}`)
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (data) setCallLogs(data);
+    } catch {}
+  }
+
   // Arka Plandaki Aktif Çağrıları / Sinyalleri Denetle
   async function checkPendingCallSignals(username: string) {
     try {
@@ -372,13 +450,17 @@ export default function ChatPage() {
         const signal = data[0];
         const ageSeconds = (Date.now() - new Date(signal.created_at).getTime()) / 1000;
 
-        if (ageSeconds < 40 && !callModalOpen && !incomingCall) {
+        if (ageSeconds < 36 && !callModalOpen && !incomingCall) {
           currentCallPartnerRef.current = signal.caller;
           setActiveCallId(signal.call_id);
           setIsVideoCall(signal.call_type === "video");
           setIncomingCall({ sender: signal.caller, payload: JSON.stringify(signal.payload) });
-          triggerPushNotification("📞 Gelen Arama", `@${signal.caller} sizi arıyor...`, true);
-        } else if (ageSeconds >= 40) {
+          triggerPushNotification(
+            signal.call_type === "video" ? "📹 Görüntülü Arama" : "📞 Sesli Arama",
+            `@${signal.caller} sizi arıyor...`,
+            true
+          );
+        } else if (ageSeconds >= 36) {
           await supabase.from("call_signals").update({ status: "missed" }).eq("id", signal.id);
         }
       }
@@ -409,6 +491,7 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
       loadUserDataFromCloud(user);
+      loadCallLogs(user);
       checkPendingCallSignals(user);
       initRealtimeHub(user, hideOnline);
     }
@@ -434,16 +517,6 @@ export default function ChatPage() {
   useEffect(() => {
     if (localStreamRef.current) localStreamRef.current.getVideoTracks().forEach((t) => { t.enabled = !cameraOff; });
   }, [cameraOff]);
-
-  useEffect(() => {
-    if (incomingCall && soundEnabled) ringtoneRef.current?.play().catch(() => {});
-    else { ringtoneRef.current?.pause(); if (ringtoneRef.current) ringtoneRef.current.currentTime = 0; }
-  }, [incomingCall, soundEnabled]);
-
-  useEffect(() => {
-    if (callStatus.includes("aranıyor") && soundEnabled) dialtoneRef.current?.play().catch(() => {});
-    else { dialtoneRef.current?.pause(); if (dialtoneRef.current) dialtoneRef.current.currentTime = 0; }
-  }, [callStatus, soundEnabled]);
 
   useEffect(() => {
     if (!currentUser || !activeChat) return;
@@ -532,7 +605,7 @@ export default function ChatPage() {
   }
 
   // ====================================================
-  // WEBRTC VE SES İLETİMİ (AUTOPLAY KİLİTSİZ & HATA GEÇİRMEZ)
+  // WEBRTC & SİNYALLEŞME & CEVAPSIZ ÇAĞRI MOTORU
   // ====================================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, { config: { broadcast: { self: false }, presence: { key: username } } });
@@ -557,9 +630,14 @@ export default function ChatPage() {
         setActiveCallId(payload.call_id || Date.now().toString());
         setIsVideoCall(payload.isVideo || false);
         setIncomingCall(payload);
-        triggerPushNotification("📞 Gelen Arama", `@${payload.sender} sizi arıyor...`, true);
+        triggerPushNotification(
+          payload.isVideo ? "📹 Görüntülü Arama" : "📞 Sesli Arama",
+          `@${payload.sender} sizi arıyor...`,
+          true
+        );
       } else if (payload.type === "answer" && peerConnectionRef.current) {
         try {
+          if (callTimeoutTracker.current) clearTimeout(callTimeoutTracker.current);
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
           setCallStatus("Ses Hattı Bağlandı 🟢");
           setIsCallActive(true);
@@ -568,9 +646,7 @@ export default function ChatPage() {
             const candidate = iceCandidatesQueue.current.shift();
             try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
           }
-        } catch (e) {
-          console.error("Answer hatası:", e);
-        }
+        } catch {}
       } else if (payload.type === "candidate") {
         const candidate = JSON.parse(payload.payload);
         if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
@@ -580,6 +656,9 @@ export default function ChatPage() {
         }
       } else if (payload.type === "end") {
         cleanupCall();
+      } else if (payload.type === "missed_alert") {
+        triggerPushNotification("🔴 Cevapsız Arama", `@${payload.sender} sizi aradı.`, false, true);
+        if (currentUser) loadCallLogs(currentUser);
       }
     });
 
@@ -650,7 +729,6 @@ export default function ChatPage() {
     peerConnectionRef.current = pc;
     iceCandidatesQueue.current = [];
 
-    // Çift Yönlü Ses ve Video Transceiver'larını Zorunlu Kıl
     pc.addTransceiver("audio", { direction: "sendrecv" });
     pc.addTransceiver("video", { direction: "sendrecv" });
 
@@ -663,14 +741,12 @@ export default function ChatPage() {
     pc.ontrack = (event) => {
       const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
       
-      // 1. HTML5 Audio Elementi Bağlantısı
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
         remoteAudioRef.current.muted = false;
         remoteAudioRef.current.play().catch(() => {});
       }
       
-      // 2. Web Audio API Destination Bağlantısı (Autoplay Engelini Kırar)
       try {
         if (!audioContextRef.current) {
           const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -705,7 +781,6 @@ export default function ChatPage() {
 
   async function startCall(video: boolean = false) {
     if (!activeChat || activeChat.isGroup || !currentUser) return;
-    unlockAudioHardware();
 
     const target = activeChat.name;
     const callId = `call_${Date.now()}`;
@@ -745,6 +820,25 @@ export default function ChatPage() {
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: video });
       await pc.setLocalDescription(offer);
       sendSignal(target, "offer", JSON.stringify(offer), { call_id: callId, isVideo: video });
+
+      // 35 Saniye Zaman Aşımı (Cevap verilmezse Cevapsız Çağrı kaydet)
+      if (callTimeoutTracker.current) clearTimeout(callTimeoutTracker.current);
+      callTimeoutTracker.current = setTimeout(async () => {
+        if (!isCallActive) {
+          sendSignal(target, "missed_alert", "{}");
+          await supabase.from("call_logs").insert([{
+            caller: currentUser,
+            receiver: target,
+            call_type: video ? "video" : "audio",
+            status: "missed",
+            duration: 0,
+            created_at: new Date().toISOString()
+          }]);
+          setCallStatus("Cevap Verilmedi 🔴");
+          setTimeout(() => endCall(true), 1500);
+        }
+      }, 35000);
+
     } catch {
       setCallStatus("Arama başlatılamadı.");
     }
@@ -752,7 +846,6 @@ export default function ChatPage() {
 
   async function acceptCall() {
     if (!incomingCall || !currentUser) return;
-    unlockAudioHardware();
 
     const caller = incomingCall.sender;
     currentCallPartnerRef.current = caller;
@@ -813,6 +906,7 @@ export default function ChatPage() {
   }
 
   function cleanupCall() {
+    if (callTimeoutTracker.current) clearTimeout(callTimeoutTracker.current);
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => { t.stop(); t.enabled = false; });
       localStreamRef.current = null;
@@ -827,6 +921,22 @@ export default function ChatPage() {
     setIncomingCall(null);
     setCallStatus("");
     setIsCallActive(false);
+    stopCustomRingtone();
+
+    // Arama Kaydını DB'ye Kaydet
+    if (currentUser && currentCallPartnerRef.current) {
+      supabase.from("call_logs").insert([{
+        caller: currentUser,
+        receiver: currentCallPartnerRef.current,
+        call_type: isVideoCall ? "video" : "audio",
+        status: isCallActive ? "completed" : "missed",
+        duration: callDuration,
+        created_at: new Date().toISOString()
+      }]).then(() => {
+        loadCallLogs(currentUser);
+      });
+    }
+
     currentCallPartnerRef.current = null;
     setIsMuted(false);
     setIsSpeakerOff(false);
@@ -837,8 +947,6 @@ export default function ChatPage() {
       setActiveCallId(null);
     }
 
-    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
-    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
     if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
     if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
   }
@@ -994,8 +1102,6 @@ export default function ChatPage() {
     <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans">
       
       {/* SİSTEM SESLERİ VE DOĞRUDAN SES ÇALICI */}
-      <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
-      <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
 
       {/* SOL KENAR ÇUBUĞU */}
@@ -1027,7 +1133,7 @@ export default function ChatPage() {
             >
               🔔
             </button>
-            <div className="px-2 py-0.5 rounded-xl bg-[#242f3d] border border-[#14F195]/40 text-[9px] font-bold text-[#14F195] flex flex-col items-center leading-tight"><span>{tpsCount}</span><span className="text-[7px] text-gray-400 font-normal">TPS</span></div>
+            <button onClick={() => setCallLogsModalOpen(true)} title="Arama Geçmişi & Cevapsızlar" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📞</button>
             <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı Mesajlar" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-yellow-400 text-xs transition-all active:scale-90 cursor-pointer">⭐</button>
             <button onClick={() => setSettingsModalOpen(true)} title="Ayarlar & Gizlilik" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-300 text-xs transition-all active:scale-90 cursor-pointer">⚙️</button>
             <button onClick={() => setCreateGroupModal(true)} title="Yeni Özel Grup Kur" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs font-bold transition-all active:scale-90 cursor-pointer">👥+</button>
@@ -1042,6 +1148,7 @@ export default function ChatPage() {
                   <div className="w-8 h-8 rounded-xl bg-[#242f3d] border border-[#14F195] flex items-center justify-center"><RishyouDogIcon size={20} /></div>
                   <div><h4 className="text-xs font-black text-white truncate">@{currentUser}</h4><p className="text-[10px] text-[#14F195]">Rishyou Web3</p></div>
                 </div>
+                <button onClick={() => { setCallLogsModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>📞</span> Arama Geçmişi & Cevapsızlar</button>
                 <button onClick={() => { setSettingsModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>✏️</span> Ayarlar & Gizlilik</button>
                 <button onClick={() => { setLeaderboardModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-amber-400 font-bold transition-colors cursor-pointer"><span>🏆</span> Bahşiş Liderleri</button>
                 <button onClick={() => { setQrModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>🎴</span> QR ile Ödeme Al</button>
@@ -1241,6 +1348,55 @@ export default function ChatPage() {
         )}
       </main>
 
+      {/* ARAMA GEÇMİŞİ VE CEVAPSIZ ÇAĞRILAR MODALI */}
+      {callLogsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-[#17212b] border border-[#14F195]/40 rounded-3xl p-5 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-700 pb-2">
+              <h3 className="text-xs font-black text-white flex items-center gap-1.5"><span>📞</span> Arama Geçmişi & Cevapsızlar</h3>
+              <button onClick={() => setCallLogsModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button>
+            </div>
+            <div className="max-h-60 overflow-y-auto space-y-2">
+              {callLogs.map((log) => {
+                const isOutgoing = log.caller === currentUser;
+                const isMissed = log.status === "missed";
+                const partner = isOutgoing ? log.receiver : log.caller;
+                return (
+                  <div key={log.id} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${isMissed && !isOutgoing ? "bg-red-500/10 border-red-500/30" : "bg-[#242f3d] border-white/5"}`}>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1 font-bold text-white">
+                        <span>{isMissed ? "🔴" : isOutgoing ? "↗️" : "↙️"}</span>
+                        <span className="truncate">@{partner}</span>
+                        <span className="text-[10px] text-gray-400">({log.call_type === "video" ? "Görüntülü" : "Sesli"})</span>
+                      </div>
+                      <div className="text-[9px] text-gray-400 flex items-center gap-2 mt-0.5">
+                        <span>{new Date(log.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                        <span>{isMissed ? "Cevapsız Çağrı" : `${formatCallTime(log.duration || 0)}`}</span>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        setCallLogsModalOpen(false);
+                        selectChat({ id: partner, name: partner, isGroup: false });
+                        setTimeout(() => startCall(log.call_type === "video"), 300);
+                      }} 
+                      className="p-2 rounded-xl bg-[#14F195]/20 text-[#14F195] hover:bg-[#14F195] hover:text-black font-black text-xs transition-colors cursor-pointer"
+                      title="Geri Ara"
+                    >
+                      📞
+                    </button>
+                  </div>
+                );
+              })}
+              {callLogs.length === 0 && (
+                <div className="text-center py-6 text-xs text-gray-500">Henüz bir arama geçmişi bulunmuyor.</div>
+              )}
+            </div>
+            <button onClick={() => setCallLogsModalOpen(false)} className="w-full py-2 bg-[#242f3d] text-gray-300 font-bold text-xs rounded-xl cursor-pointer hover:text-white">Kapat</button>
+          </div>
+        </div>
+      )}
+
       {/* ARAMA VE GÖRÜŞME EKRANI MODALI */}
       {callModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/95 backdrop-blur-xl">
@@ -1268,7 +1424,7 @@ export default function ChatPage() {
       {/* GELEN ARAMA BİLDİRİMİ */}
       {incomingCall && (
         <div className="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:w-84 z-50 bg-[#17212b] border-2 border-[#14F195] rounded-3xl p-4 shadow-2xl flex items-center justify-between animate-bounce">
-          <div><h4 className="text-xs font-black text-white">Gelen Arama</h4><p className="text-xs text-[#14F195] font-bold">@{incomingCall.sender}</p></div>
+          <div><h4 className="text-xs font-black text-white">Gelen Arama ({isVideoCall ? "Görüntülü" : "Sesli"})</h4><p className="text-xs text-[#14F195] font-bold">@{incomingCall.sender}</p></div>
           <div className="flex gap-2">
             <button onClick={acceptCall} className="py-2 px-3 bg-[#14F195] text-black rounded-xl text-xs font-black cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">Cevapla</button>
             <button onClick={() => endCall(true)} className="py-2 px-3 bg-red-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">Reddet</button>
