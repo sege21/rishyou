@@ -139,7 +139,6 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  // KALICI DİSK KAYDI (LocalStorage)
   function saveLocalMessage(user: string, msg: any) {
     try {
       const key = `rishyou_history_${user}`;
@@ -174,9 +173,24 @@ export default function ChatPage() {
     setActiveChat(chat);
     if (chat) {
       sessionStorage.setItem("rishyou_active_chat", JSON.stringify(chat));
+      if (!chat.isGroup && currentUser) {
+        addChatPartner(chat.name);
+      }
     } else {
       sessionStorage.removeItem("rishyou_active_chat");
     }
+  }
+
+  function addChatPartner(partnerName: string) {
+    if (!currentUser) return;
+    setActiveChatPartners((prev) => {
+      if (!prev.includes(partnerName)) {
+        const updated = [partnerName, ...prev];
+        localStorage.setItem(`rishyou_partners_${currentUser}`, JSON.stringify(updated));
+        return updated;
+      }
+      return prev;
+    });
   }
 
   useEffect(() => {
@@ -190,12 +204,14 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
 
-      // SAYFA YENİLENİNCE AÇIK SOHBETİ GERİ YÜKLE
+      const savedPartners = localStorage.getItem(`rishyou_partners_${user}`);
+      if (savedPartners) {
+        try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
+      }
+
       const savedActiveChat = sessionStorage.getItem("rishyou_active_chat");
       if (savedActiveChat) {
-        try {
-          setActiveChat(JSON.parse(savedActiveChat));
-        } catch {}
+        try { setActiveChat(JSON.parse(savedActiveChat)); } catch {}
       }
 
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
@@ -335,12 +351,14 @@ export default function ChatPage() {
   async function loadChatPartners(current: string) {
     const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.eq.${current},receiver.eq.${current}`);
     if (data) {
-      const partners = new Set<string>();
+      const partners = new Set<string>(activeChatPartners);
       data.forEach((m) => { 
         if (m.sender !== current) partners.add(m.sender); 
         if (m.receiver !== current) partners.add(m.receiver); 
       });
-      setActiveChatPartners(Array.from(partners));
+      const arr = Array.from(partners);
+      setActiveChatPartners(arr);
+      localStorage.setItem(`rishyou_partners_${current}`, JSON.stringify(arr));
     }
   }
 
@@ -357,7 +375,6 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // KALICI DİREKT MESAJ YÜKLEME (Yerel + Supabase)
   async function loadDirectMessages(u1: string, u2: string) { 
     const localMsgs = getLocalMessages(u1, u2, false);
     setMessages(localMsgs);
@@ -480,7 +497,6 @@ export default function ChatPage() {
       }
     });
 
-    // GELEN MESAJI ANINDA DİSKE VE EKRANA YAZ
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -494,10 +510,10 @@ export default function ChatPage() {
         }
       } else {
         if (payload.receiver === username) {
+          addChatPartner(payload.sender);
           if (cur && !cur.isGroup && cur.name === payload.sender) {
             setMessages((prev) => [...prev, payload]);
           }
-          setActiveChatPartners((prev) => prev.includes(payload.sender) ? prev : [...prev, payload.sender]);
         }
       }
     });
@@ -525,7 +541,6 @@ export default function ChatPage() {
     }
   }
 
-  // KALICI VE HIZLI MESAJ GÖNDERİMİ
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -543,13 +558,13 @@ export default function ChatPage() {
       isGroup: activeChat.isGroup
     };
 
-    // 1. Ekrana bas
     setMessages((prev) => [...prev, newMsg]);
-
-    // 2. Yerel diske mühürle (Yenileyince kesinlikle gitmez)
     saveLocalMessage(currentUser, newMsg);
 
-    // 3. Karşı tarafa anında WebSocket ile fırlat
+    if (!activeChat.isGroup) {
+      addChatPartner(activeChat.name);
+    }
+
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -558,7 +573,6 @@ export default function ChatPage() {
       });
     }
 
-    // 4. Supabase'e kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -576,9 +590,6 @@ export default function ChatPage() {
           message_type: isAudio ? "audio" : "text",
           created_at: newMsg.created_at
         }]);
-        if (!activeChatPartners.includes(activeChat.name)) {
-          setActiveChatPartners((prev) => [...prev, activeChat.name]);
-        }
       }
     } catch (e) {
       console.error("Mesaj kayıt hatası:", e);
@@ -831,6 +842,8 @@ export default function ChatPage() {
     setNewVaultNote("");
   }
 
+  // TELEGRAM / WHATSAPP TARZI INBOX FİLTRELEME
+  // Arama boşsa: Sadece konuştuğun kişiler. Arama doluysa: Tüm kayıtlı kullanıcılar.
   const visibleUsers = searchQuery.trim()
     ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
     : users.filter((u) => activeChatPartners.includes(u.username));
@@ -955,13 +968,13 @@ export default function ChatPage() {
 
         <div className="flex px-3 pt-2.5 gap-1.5">
           <button onClick={() => setTabFilter("all")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "all" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Tümü</button>
-          <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Kişiler</button>
+          <button onClick={() => setTabFilter("direct")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "direct" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gelen Kutusu</button>
           <button onClick={() => setTabFilter("groups")} className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-colors cursor-pointer ${tabFilter === "groups" ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-400 hover:text-white"}`}>Gruplarım</button>
         </div>
 
         <div className="p-3">
           <div className="relative">
-            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Kişi veya dahil olduğun grubu ara..." className="w-full bg-[#242f3d] border border-gray-700/60 text-xs text-white pl-8 pr-3 py-2 rounded-xl focus:outline-none focus:border-[#14F195] placeholder-gray-500" />
+            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Yeni kişi ara (örn: jokerome)..." className="w-full bg-[#242f3d] border border-gray-700/60 text-xs text-white pl-8 pr-3 py-2 rounded-xl focus:outline-none focus:border-[#14F195] placeholder-gray-500" />
             <span className="absolute left-2.5 top-2 text-xs text-gray-400">🔍</span>
           </div>
         </div>
@@ -1027,6 +1040,12 @@ export default function ChatPage() {
               </div>
             );
           })}
+
+          {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.length === 0 && (
+            <div className="text-center py-8 px-4 text-gray-500 text-xs">
+              {searchQuery.trim() ? "Kullanıcı bulunamadı." : "Henüz bir sohbetiniz yok. Üstteki arama çubuğundan kullanıcı adı arayarak sohbete başlayın."}
+            </div>
+          )}
         </div>
       </aside>
 
@@ -1141,7 +1160,7 @@ export default function ChatPage() {
               <RishyouDogIcon size={52} />
             </div>
             <h3 className="text-base font-bold text-white mb-1">Rishyou Web3 Messenger</h3>
-            <p className="text-xs text-gray-500 max-w-xs">Sohbete başlamak için bir kişi seçin veya arama yapın.</p>
+            <p className="text-xs text-gray-500 max-w-xs">Gelen kutunuzdaki bir sohbeti seçin veya yukarıdan kişi arayın.</p>
           </div>
         )}
       </main>
