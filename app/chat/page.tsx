@@ -139,6 +139,38 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
+  // HİBRİT KAYIT: YEREL DEPOYA YAZ
+  function saveMsgToLocalStorage(user: string, msg: any) {
+    try {
+      const key = `rishyou_local_msgs_${user}`;
+      const existing = JSON.parse(localStorage.getItem(key) || "[]");
+      const isDuplicate = existing.some(
+        (m: any) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
+      );
+      if (!isDuplicate) {
+        existing.push(msg);
+        localStorage.setItem(key, JSON.stringify(existing));
+      }
+    } catch {}
+  }
+
+  // HİBRİT OKUMA: YEREL DEPODAN OKU
+  function getMsgsFromLocalStorage(user: string, partnerOrGroupId: string, isGroup: boolean) {
+    try {
+      const key = `rishyou_local_msgs_${user}`;
+      const all = JSON.parse(localStorage.getItem(key) || "[]");
+      if (isGroup) {
+        return all.filter((m: any) => m.group_id === partnerOrGroupId);
+      } else {
+        return all.filter(
+          (m: any) => (m.sender === user && m.receiver === partnerOrGroupId) || (m.sender === partnerOrGroupId && m.receiver === user)
+        );
+      }
+    } catch {
+      return [];
+    }
+  }
+
   useEffect(() => {
     const user = sessionStorage.getItem("rishyou_username");
     if (!user) {
@@ -309,8 +341,15 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // KESİN VE KALICI DİREKT MESAJ YÜKLEYİCİ
+  // HİBRİT MESAJ YÜKLEME: ÖNCE YERELDEN GÖSTER, SONRA BULUTLA BİRLEŞTİR
   async function loadDirectMessages(u1: string, u2: string) { 
+    // 1. Yerel hafızadan hemen yükle (0ms bekleme, yenileyince asla gitmez)
+    const localMsgs = getMsgsFromLocalStorage(u1, u2, false);
+    if (localMsgs.length > 0) {
+      setMessages(localMsgs);
+    }
+
+    // 2. Supabase'den çek ve eksikleri birleştir
     try {
       const { data, error } = await supabase
         .from("messages")
@@ -320,14 +359,21 @@ export default function ChatPage() {
 
       if (!error && data) {
         const filtered = data.filter(
-          (m: any) =>
-            (m.sender === u1 && m.receiver === u2) ||
-            (m.sender === u2 && m.receiver === u1)
+          (m: any) => (m.sender === u1 && m.receiver === u2) || (m.sender === u2 && m.receiver === u1)
         );
-        setMessages(filtered);
+        
+        // Birleştir ve tekilleştir
+        const mergedMap = new Map();
+        [...localMsgs, ...filtered].forEach((m) => {
+          const key = `${m.sender}_${m.created_at}_${m.content}`;
+          mergedMap.set(key, m);
+          saveMsgToLocalStorage(u1, m);
+        });
+
+        setMessages(Array.from(mergedMap.values()));
       }
     } catch (e) {
-      console.error("Mesaj yükleme hatası:", e);
+      console.error("Mesaj bulut senkronizasyon hatası:", e);
     }
   }
 
@@ -337,13 +383,28 @@ export default function ChatPage() {
       setMessages([]);
       return;
     }
+
+    const localMsgs = getMsgsFromLocalStorage(currentUser || "", groupId, true);
+    if (localMsgs.length > 0) {
+      setMessages(localMsgs);
+    }
+
     try {
       const { data, error } = await supabase
         .from("group_messages")
         .select("*")
         .eq("group_id", groupId)
         .order("created_at", { ascending: true }); 
-      if (!error && data) setMessages(data); 
+      
+      if (!error && data) {
+        const mergedMap = new Map();
+        [...localMsgs, ...data].forEach((m) => {
+          const key = `${m.sender}_${m.created_at}_${m.content}`;
+          mergedMap.set(key, m);
+          if (currentUser) saveMsgToLocalStorage(currentUser, m);
+        });
+        setMessages(Array.from(mergedMap.values()));
+      }
     } catch (e) {
       console.error("Grup mesaj hatası:", e);
     }
@@ -415,6 +476,8 @@ export default function ChatPage() {
       if (!payload) return;
       const cur = activeChatRef.current;
 
+      saveMsgToLocalStorage(username, payload);
+
       if (payload.isGroup) {
         const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
         if (isMember && cur?.isGroup && cur.id === payload.group_id) {
@@ -453,7 +516,7 @@ export default function ChatPage() {
     }
   }
 
-  // KALICI VE ANLIK MESAJ GÖNDERME
+  // KUSURSUZ MESAJ GÖNDERİCİ: EKRANA YANSIT + YERELE YAZ + BULUTA GÖNDER
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -471,8 +534,13 @@ export default function ChatPage() {
       isGroup: activeChat.isGroup
     };
 
+    // 1. Ekrana bas
     setMessages((prev) => [...prev, newMsg]);
 
+    // 2. Yerel hafızaya anında mühürle (Sayfa yenilense de kalır)
+    saveMsgToLocalStorage(currentUser, newMsg);
+
+    // 3. Karşı tarafa anında fırlat
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -481,6 +549,7 @@ export default function ChatPage() {
       });
     }
 
+    // 4. Supabase'e kalıcı olarak kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -503,7 +572,7 @@ export default function ChatPage() {
         }
       }
     } catch (e) {
-      console.error("Mesaj veritabanı kayıt hatası:", e);
+      console.error("Supabase insert log:", e);
     }
   }
 
