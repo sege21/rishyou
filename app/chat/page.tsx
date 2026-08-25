@@ -41,6 +41,37 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
   );
 }
 
+// MOBİL İÇİN KOMPAKT SES OYNATICI
+function CompactAudioPlayer({ src }: { src: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  function togglePlay() {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 py-1 px-2 bg-black/30 rounded-xl my-0.5 max-w-[200px]">
+      <audio ref={audioRef} src={src} onEnded={() => setIsPlaying(false)} className="hidden" playsInline />
+      <button type="button" onClick={togglePlay} className="w-7 h-7 rounded-full bg-[#14F195] text-black flex items-center justify-center text-xs font-black shadow active:scale-95 cursor-pointer">
+        {isPlaying ? "⏸" : "▶"}
+      </button>
+      <div className="flex-1 flex flex-col justify-center">
+        <div className="h-1 bg-gray-600 rounded-full overflow-hidden">
+          <div className={`h-full bg-[#14F195] ${isPlaying ? "animate-pulse w-full" : "w-1/3"}`} />
+        </div>
+        <span className="text-[9px] text-gray-300 mt-0.5">Sesli Mesaj</span>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
@@ -140,7 +171,9 @@ export default function ChatPage() {
   }, [groups]);
 
   function getChatStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
-    return isGroup ? `rishyou_chat_grp_${partnerOrGroupId}` : `rishyou_chat_dm_${[user, partnerOrGroupId].sort().join("_")}`;
+    const u1 = (user || "").toLowerCase().trim();
+    const u2 = (partnerOrGroupId || "").toLowerCase().trim();
+    return isGroup ? `rishyou_chat_grp_${u2}` : `rishyou_chat_dm_${[u1, u2].sort().join("_")}`;
   }
 
   function saveMessageToStorage(user: string, partnerOrGroupId: string, isGroup: boolean, msg: any) {
@@ -148,7 +181,7 @@ export default function ChatPage() {
       const key = getChatStorageKey(user, partnerOrGroupId, isGroup);
       const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
       const exists = existing.some(
-        (m) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
+        (m) => m.created_at === msg.created_at && m.sender?.toLowerCase() === msg.sender?.toLowerCase() && m.content === msg.content
       );
       if (!exists) {
         existing.push(msg);
@@ -169,21 +202,23 @@ export default function ChatPage() {
   function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
     setActiveChat(chat);
     if (chat && currentUser) {
-      localStorage.setItem(`rishyou_last_active_${currentUser}`, JSON.stringify(chat));
+      localStorage.setItem(`rishyou_last_active_${currentUser.toLowerCase()}`, JSON.stringify(chat));
       if (!chat.isGroup) {
         addChatPartner(chat.name);
       }
     } else if (currentUser) {
-      localStorage.removeItem(`rishyou_last_active_${currentUser}`);
+      localStorage.removeItem(`rishyou_last_active_${currentUser.toLowerCase()}`);
     }
   }
 
   function addChatPartner(partnerName: string) {
     if (!currentUser) return;
+    const cleanPartner = partnerName.trim();
     setActiveChatPartners((prev) => {
-      if (!prev.includes(partnerName)) {
-        const updated = [partnerName, ...prev];
-        localStorage.setItem(`rishyou_partners_${currentUser}`, JSON.stringify(updated));
+      const exists = prev.some((p) => p.toLowerCase() === cleanPartner.toLowerCase());
+      if (!exists) {
+        const updated = [cleanPartner, ...prev];
+        localStorage.setItem(`rishyou_partners_${currentUser.toLowerCase()}`, JSON.stringify(updated));
         return updated;
       }
       return prev;
@@ -191,10 +226,11 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
-    const user = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_saved_username");
-    if (!user) {
+    const rawUser = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_saved_username");
+    if (!rawUser) {
       router.push("/");
     } else {
+      const user = rawUser.trim();
       setCurrentUser(user);
       localStorage.setItem("rishyou_saved_username", user);
 
@@ -203,29 +239,29 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
 
-      const savedPartners = localStorage.getItem(`rishyou_partners_${user}`);
+      const savedPartners = localStorage.getItem(`rishyou_partners_${user.toLowerCase()}`);
       if (savedPartners) {
         try { setActiveChatPartners(JSON.parse(savedPartners)); } catch {}
       }
 
-      const lastActive = localStorage.getItem(`rishyou_last_active_${user}`);
+      const lastActive = localStorage.getItem(`rishyou_last_active_${user.toLowerCase()}`);
       if (lastActive) {
         try { setActiveChat(JSON.parse(lastActive)); } catch {}
       }
 
-      const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
+      const savedVault = localStorage.getItem(`rishyou_vault_${user.toLowerCase()}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
 
-      const savedPins = localStorage.getItem(`rishyou_pins_${user}`);
+      const savedPins = localStorage.getItem(`rishyou_pins_${user.toLowerCase()}`);
       if (savedPins) setPinnedChats(JSON.parse(savedPins));
 
-      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user}`);
+      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user.toLowerCase()}`);
       if (savedTimers) {
         try { setChatTimers(JSON.parse(savedTimers)); } catch {}
       }
 
       let userHideOnline = false;
-      const savedSettings = localStorage.getItem(`rishyou_settings_${user}`);
+      const savedSettings = localStorage.getItem(`rishyou_settings_${user.toLowerCase()}`);
       if (savedSettings) {
         try {
           const parsed = JSON.parse(savedSettings);
@@ -248,18 +284,29 @@ export default function ChatPage() {
       setTpsCount((prev) => prev + Math.floor(Math.random() * 11) - 5);
     }, 3000);
 
+    // MOBİL İÇİN 3 SANİYELİK KESİNTİSİZ SENKRONİZASYON (Failsafe Sync)
+    const mobileSyncInterval = setInterval(() => {
+      const cur = activeChatRef.current;
+      const user = sessionStorage.getItem("rishyou_username");
+      if (cur && user) {
+        if (cur.isGroup) loadGroupMessages(cur.id);
+        else loadDirectMessages(user, cur.name);
+      }
+    }, 3000);
+
     return () => {
       clearInterval(tpsInterval);
+      clearInterval(mobileSyncInterval);
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
   }, [router]);
 
   function setAutoDeleteForCurrentChat(hours: number) {
     if (!currentUser || !activeChat) return;
-    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name;
+    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name.toLowerCase();
     const updated = { ...chatTimers, [chatKey]: hours };
     setChatTimers(updated);
-    localStorage.setItem(`rishyou_chat_timers_${currentUser}`, JSON.stringify(updated));
+    localStorage.setItem(`rishyou_chat_timers_${currentUser.toLowerCase()}`, JSON.stringify(updated));
     setChatTimerModalOpen(false);
   }
 
@@ -274,7 +321,7 @@ export default function ChatPage() {
       lang,
       ...updated
     };
-    localStorage.setItem(`rishyou_settings_${currentUser}`, JSON.stringify(settings));
+    localStorage.setItem(`rishyou_settings_${currentUser.toLowerCase()}`, JSON.stringify(settings));
 
     if (updated.hideOnline !== undefined && signalChannelRef.current) {
       signalChannelRef.current.track({
@@ -331,13 +378,15 @@ export default function ChatPage() {
     }
   }, [currentUser, activeChat]);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { 
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
+  }, [messages]);
 
   function togglePin(id: string, e: React.MouseEvent) {
     e.stopPropagation();
     setPinnedChats(prev => {
       const updated = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
-      localStorage.setItem(`rishyou_pins_${currentUser}`, JSON.stringify(updated));
+      localStorage.setItem(`rishyou_pins_${currentUser?.toLowerCase()}`, JSON.stringify(updated));
       return updated;
     });
   }
@@ -349,16 +398,16 @@ export default function ChatPage() {
 
   async function loadChatPartners(current: string) {
     try {
-      const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.eq.${current},receiver.eq.${current}`);
+      const { data } = await supabase.from("messages").select("sender, receiver").or(`sender.ilike.${current},receiver.ilike.${current}`);
       if (data) {
         const partners = new Set<string>(activeChatPartners);
         data.forEach((m) => { 
-          if (m.sender !== current) partners.add(m.sender); 
-          if (m.receiver !== current) partners.add(m.receiver); 
+          if (m.sender?.toLowerCase() !== current.toLowerCase()) partners.add(m.sender); 
+          if (m.receiver?.toLowerCase() !== current.toLowerCase()) partners.add(m.receiver); 
         });
         const arr = Array.from(partners);
         setActiveChatPartners(arr);
-        localStorage.setItem(`rishyou_partners_${current}`, JSON.stringify(arr));
+        localStorage.setItem(`rishyou_partners_${current.toLowerCase()}`, JSON.stringify(arr));
       }
     } catch {}
   }
@@ -368,8 +417,8 @@ export default function ChatPage() {
       const { data } = await supabase.from("groups").select("*");
       if (data) {
         const myGroups = data.filter((g: any) => {
-          const membersList = Array.isArray(g.members) ? g.members : [];
-          return g.created_by === username || membersList.includes(username);
+          const membersList = Array.isArray(g.members) ? g.members.map((m: string) => m.toLowerCase()) : [];
+          return g.created_by?.toLowerCase() === username.toLowerCase() || membersList.includes(username.toLowerCase());
         });
         setGroups(myGroups);
       }
@@ -378,19 +427,21 @@ export default function ChatPage() {
 
   async function loadDirectMessages(u1: string, u2: string) { 
     const localMsgs = getMessagesFromStorage(u1, u2, false);
-    setMessages(localMsgs);
+    if (localMsgs.length > 0) {
+      setMessages(localMsgs);
+    }
 
     try {
       const { data, error } = await supabase
         .from("messages")
         .select("*")
-        .or(`and(sender.eq.${u1},receiver.eq.${u2}),and(sender.eq.${u2},receiver.eq.${u1})`)
+        .or(`and(sender.ilike.${u1},receiver.ilike.${u2}),and(sender.ilike.${u2},receiver.ilike.${u1})`)
         .order("created_at", { ascending: true }); 
 
       if (!error && data) {
         const mergedMap = new Map();
         [...localMsgs, ...data].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
+          const key = `${m.sender?.toLowerCase()}_${m.created_at}_${m.content}`;
           mergedMap.set(key, m);
           saveMessageToStorage(u1, u2, false, m);
         });
@@ -409,7 +460,9 @@ export default function ChatPage() {
     }
 
     const localMsgs = getMessagesFromStorage(currentUser || "", groupId, true);
-    setMessages(localMsgs);
+    if (localMsgs.length > 0) {
+      setMessages(localMsgs);
+    }
 
     try {
       const { data, error } = await supabase
@@ -421,7 +474,7 @@ export default function ChatPage() {
       if (!error && data) {
         const mergedMap = new Map();
         [...localMsgs, ...data].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
+          const key = `${m.sender?.toLowerCase()}_${m.created_at}_${m.content}`;
           mergedMap.set(key, m);
           if (currentUser) saveMessageToStorage(currentUser, groupId, true, m);
         });
@@ -433,7 +486,7 @@ export default function ChatPage() {
   }
 
   async function loadWalletData(username: string) {
-    const { data } = await supabase.from("users").select("wallet_address").eq("username", username).single();
+    const { data } = await supabase.from("users").select("wallet_address").ilike("username", username).single();
     if (data && data.wallet_address) {
       setWalletAddress(data.wallet_address);
       try {
@@ -449,7 +502,7 @@ export default function ChatPage() {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
       config: { 
         broadcast: { self: false },
-        presence: { key: username }
+        presence: { key: username.toLowerCase() }
       }
     });
 
@@ -462,7 +515,7 @@ export default function ChatPage() {
         if (presences && presences.length > 0) {
           const p = presences[0];
           if (!p.hideOnline) {
-            updatedMap[p.username] = { online: true, lastSeen: p.online_at };
+            updatedMap[p.username?.toLowerCase()] = { online: true, lastSeen: p.online_at };
           }
         }
       });
@@ -470,7 +523,7 @@ export default function ChatPage() {
     });
 
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
-      if (!payload || payload.receiver !== username) return;
+      if (!payload || payload.receiver?.toLowerCase() !== username.toLowerCase()) return;
 
       if (payload.type === "offer") {
         currentCallPartnerRef.current = payload.sender;
@@ -505,10 +558,10 @@ export default function ChatPage() {
           setMessages((prev) => [...prev, payload]);
         }
       } else {
-        if (payload.receiver === username) {
+        if (payload.receiver?.toLowerCase() === username.toLowerCase()) {
           saveMessageToStorage(username, payload.sender, false, payload);
           addChatPartner(payload.sender);
-          if (cur && !cur.isGroup && cur.name === payload.sender) {
+          if (cur && !cur.isGroup && cur.name?.toLowerCase() === payload.sender?.toLowerCase()) {
             setMessages((prev) => [...prev, payload]);
           }
         }
@@ -538,7 +591,6 @@ export default function ChatPage() {
     }
   }
 
-  // MOBİL UYUMLU SES KAYDI & MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -596,7 +648,6 @@ export default function ChatPage() {
     }
   }
 
-  // MOBİLDE SES İLETİMİ İÇİN GELİŞMİŞ SES MOTORU
   async function startRecordingAudio() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -841,7 +892,7 @@ export default function ChatPage() {
   function handleLogout() {
     sessionStorage.removeItem("rishyou_username");
     localStorage.removeItem("rishyou_saved_username");
-    if (currentUser) localStorage.removeItem(`rishyou_last_active_${currentUser}`);
+    if (currentUser) localStorage.removeItem(`rishyou_last_active_${currentUser.toLowerCase()}`);
     router.push("/");
   }
 
@@ -856,15 +907,15 @@ export default function ChatPage() {
     if (!newVaultNote.trim() || !currentUser) return;
     const updated = [newVaultNote.trim(), ...vaultNotes];
     setVaultNotes(updated);
-    localStorage.setItem(`rishyou_vault_${currentUser}`, JSON.stringify(updated));
+    localStorage.setItem(`rishyou_vault_${currentUser.toLowerCase()}`, JSON.stringify(updated));
     setNewVaultNote("");
   }
 
   const visibleUsers = searchQuery.trim()
-    ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
-    : users.filter((u) => activeChatPartners.includes(u.username));
+    ? users.filter((u) => u.username?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : users.filter((u) => activeChatPartners.some((p) => p.toLowerCase() === u.username?.toLowerCase()));
 
-  const filteredGroups = groups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredGroups = groups.filter((g) => g.name?.toLowerCase().includes(searchQuery.toLowerCase()));
 
   const sortedUsers = [...visibleUsers].sort((a, b) => {
     const aPin = pinnedChats.includes(a.username);
@@ -878,7 +929,7 @@ export default function ChatPage() {
     return aPin === bPin ? 0 : aPin ? -1 : 1;
   });
 
-  const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name) : "";
+  const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name?.toLowerCase()) : "";
   const currentChatTimerHours = currentChatKey ? (chatTimers[currentChatKey] || 0) : 0;
 
   const displayMessages = messages.filter((m) => {
@@ -889,7 +940,7 @@ export default function ChatPage() {
   });
 
   function getUserOnlineStatus(username: string) {
-    const info = presenceMap[username];
+    const info = presenceMap[username?.toLowerCase()];
     if (info && info.online) {
       return { text: "Çevrim İçi 🟢", isOnline: true };
     }
@@ -1016,7 +1067,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                   <p className="text-[10px] text-gray-400 truncate">
-                    {g.created_by === currentUser ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}
+                    {g.created_by?.toLowerCase() === currentUser?.toLowerCase() ? "Yönetici (Siz)" : `Kurucu: @${g.created_by}`}
                   </p>
                 </div>
               </div>
@@ -1024,10 +1075,10 @@ export default function ChatPage() {
           })}
 
           {(tabFilter === "all" || tabFilter === "direct") && sortedUsers.map((u) => {
-            const isSelected = !activeChat?.isGroup && activeChat?.name === u.username;
+            const isSelected = !activeChat?.isGroup && activeChat?.name?.toLowerCase() === u.username?.toLowerCase();
             const isPinned = pinnedChats.includes(u.username);
             const statusInfo = getUserOnlineStatus(u.username);
-            const hasTimer = (chatTimers[u.username] || 0) > 0;
+            const hasTimer = (chatTimers[u.username?.toLowerCase()] || 0) > 0;
 
             return (
               <div key={`usr_${u.username}`} onClick={() => selectChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
@@ -1066,7 +1117,7 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      {/* SAĞ SOHBET ALANI (MOBİL VE MASAÜSTÜ KUSURSUZ MESAJ/SES BALONU HİZALAMASI) */}
+      {/* SAĞ SOHBET ALANI (MOBİLDE TAM UYUMLU, SAĞ/SOL AYRIMI VE KOMPAKT SES BALONU) */}
       <main className={`flex-1 flex flex-col bg-[#0e1621] relative ${!activeChat ? "hidden md:flex" : "flex"}`}>
         {activeChat ? (
           <>
@@ -1128,18 +1179,16 @@ export default function ChatPage() {
               </div>
 
               {displayMessages.map((m, idx) => {
-                const isMe = m.sender === currentUser;
+                const isMe = m.sender?.toLowerCase().trim() === currentUser?.toLowerCase().trim();
                 const isAudio = m.message_type === "audio";
                 return (
                   <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto"}`}>
+                    <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto border border-gray-700/40"}`}>
                       {activeChat.isGroup && !isMe && (
                         <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
                       )}
                       {isAudio ? (
-                        <div className="py-0.5">
-                          <audio controls src={m.content} playsInline className="w-[190px] sm:w-[220px] h-8 rounded-lg accent-[#14F195]" />
-                        </div>
+                        <CompactAudioPlayer src={m.content} />
                       ) : (
                         <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>
                       )}
