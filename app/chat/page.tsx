@@ -139,25 +139,24 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  // HİBRİT KAYIT: YEREL DEPOYA YAZ
-  function saveMsgToLocalStorage(user: string, msg: any) {
+  // KALICI DİSK KAYDI (LocalStorage)
+  function saveLocalMessage(user: string, msg: any) {
     try {
-      const key = `rishyou_local_msgs_${user}`;
+      const key = `rishyou_history_${user}`;
       const existing = JSON.parse(localStorage.getItem(key) || "[]");
-      const isDuplicate = existing.some(
+      const exists = existing.some(
         (m: any) => m.created_at === msg.created_at && m.sender === msg.sender && m.content === msg.content
       );
-      if (!isDuplicate) {
+      if (!exists) {
         existing.push(msg);
         localStorage.setItem(key, JSON.stringify(existing));
       }
     } catch {}
   }
 
-  // HİBRİT OKUMA: YEREL DEPODAN OKU
-  function getMsgsFromLocalStorage(user: string, partnerOrGroupId: string, isGroup: boolean) {
+  function getLocalMessages(user: string, partnerOrGroupId: string, isGroup: boolean) {
     try {
-      const key = `rishyou_local_msgs_${user}`;
+      const key = `rishyou_history_${user}`;
       const all = JSON.parse(localStorage.getItem(key) || "[]");
       if (isGroup) {
         return all.filter((m: any) => m.group_id === partnerOrGroupId);
@@ -171,6 +170,15 @@ export default function ChatPage() {
     }
   }
 
+  function selectChat(chat: { id: string; name: string; isGroup: boolean } | null) {
+    setActiveChat(chat);
+    if (chat) {
+      sessionStorage.setItem("rishyou_active_chat", JSON.stringify(chat));
+    } else {
+      sessionStorage.removeItem("rishyou_active_chat");
+    }
+  }
+
   useEffect(() => {
     const user = sessionStorage.getItem("rishyou_username");
     if (!user) {
@@ -181,6 +189,14 @@ export default function ChatPage() {
       loadGroups(user);
       loadWalletData(user);
       loadChatPartners(user);
+
+      // SAYFA YENİLENİNCE AÇIK SOHBETİ GERİ YÜKLE
+      const savedActiveChat = sessionStorage.getItem("rishyou_active_chat");
+      if (savedActiveChat) {
+        try {
+          setActiveChat(JSON.parse(savedActiveChat));
+        } catch {}
+      }
 
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
@@ -341,20 +357,16 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // HİBRİT MESAJ YÜKLEME: ÖNCE YERELDEN GÖSTER, SONRA BULUTLA BİRLEŞTİR
+  // KALICI DİREKT MESAJ YÜKLEME (Yerel + Supabase)
   async function loadDirectMessages(u1: string, u2: string) { 
-    // 1. Yerel hafızadan hemen yükle (0ms bekleme, yenileyince asla gitmez)
-    const localMsgs = getMsgsFromLocalStorage(u1, u2, false);
-    if (localMsgs.length > 0) {
-      setMessages(localMsgs);
-    }
+    const localMsgs = getLocalMessages(u1, u2, false);
+    setMessages(localMsgs);
 
-    // 2. Supabase'den çek ve eksikleri birleştir
     try {
       const { data, error } = await supabase
         .from("messages")
         .select("*")
-        .or(`sender.eq.${u1},receiver.eq.${u1}`)
+        .or(`sender.eq.${u1},receiver.eq.${u1},sender.eq.${u2},receiver.eq.${u2}`)
         .order("created_at", { ascending: true }); 
 
       if (!error && data) {
@@ -362,18 +374,16 @@ export default function ChatPage() {
           (m: any) => (m.sender === u1 && m.receiver === u2) || (m.sender === u2 && m.receiver === u1)
         );
         
-        // Birleştir ve tekilleştir
-        const mergedMap = new Map();
+        const map = new Map();
         [...localMsgs, ...filtered].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
-          mergedMap.set(key, m);
-          saveMsgToLocalStorage(u1, m);
+          const k = `${m.sender}_${m.created_at}_${m.content}`;
+          map.set(k, m);
+          saveLocalMessage(u1, m);
         });
-
-        setMessages(Array.from(mergedMap.values()));
+        setMessages(Array.from(map.values()));
       }
     } catch (e) {
-      console.error("Mesaj bulut senkronizasyon hatası:", e);
+      console.error("Mesaj yükleme hatası:", e);
     }
   }
 
@@ -384,10 +394,8 @@ export default function ChatPage() {
       return;
     }
 
-    const localMsgs = getMsgsFromLocalStorage(currentUser || "", groupId, true);
-    if (localMsgs.length > 0) {
-      setMessages(localMsgs);
-    }
+    const localMsgs = getLocalMessages(currentUser || "", groupId, true);
+    setMessages(localMsgs);
 
     try {
       const { data, error } = await supabase
@@ -397,13 +405,13 @@ export default function ChatPage() {
         .order("created_at", { ascending: true }); 
       
       if (!error && data) {
-        const mergedMap = new Map();
+        const map = new Map();
         [...localMsgs, ...data].forEach((m) => {
-          const key = `${m.sender}_${m.created_at}_${m.content}`;
-          mergedMap.set(key, m);
-          if (currentUser) saveMsgToLocalStorage(currentUser, m);
+          const k = `${m.sender}_${m.created_at}_${m.content}`;
+          map.set(k, m);
+          if (currentUser) saveLocalMessage(currentUser, m);
         });
-        setMessages(Array.from(mergedMap.values()));
+        setMessages(Array.from(map.values()));
       }
     } catch (e) {
       console.error("Grup mesaj hatası:", e);
@@ -472,11 +480,12 @@ export default function ChatPage() {
       }
     });
 
+    // GELEN MESAJI ANINDA DİSKE VE EKRANA YAZ
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
 
-      saveMsgToLocalStorage(username, payload);
+      saveLocalMessage(username, payload);
 
       if (payload.isGroup) {
         const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
@@ -516,7 +525,7 @@ export default function ChatPage() {
     }
   }
 
-  // KUSURSUZ MESAJ GÖNDERİCİ: EKRANA YANSIT + YERELE YAZ + BULUTA GÖNDER
+  // KALICI VE HIZLI MESAJ GÖNDERİMİ
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -537,10 +546,10 @@ export default function ChatPage() {
     // 1. Ekrana bas
     setMessages((prev) => [...prev, newMsg]);
 
-    // 2. Yerel hafızaya anında mühürle (Sayfa yenilense de kalır)
-    saveMsgToLocalStorage(currentUser, newMsg);
+    // 2. Yerel diske mühürle (Yenileyince kesinlikle gitmez)
+    saveLocalMessage(currentUser, newMsg);
 
-    // 3. Karşı tarafa anında fırlat
+    // 3. Karşı tarafa anında WebSocket ile fırlat
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -549,7 +558,7 @@ export default function ChatPage() {
       });
     }
 
-    // 4. Supabase'e kalıcı olarak kaydet
+    // 4. Supabase'e kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -572,7 +581,7 @@ export default function ChatPage() {
         }
       }
     } catch (e) {
-      console.error("Supabase insert log:", e);
+      console.error("Mesaj kayıt hatası:", e);
     }
   }
 
@@ -615,7 +624,7 @@ export default function ChatPage() {
 
       if (!error && data) {
         setGroups((prev) => [data, ...prev]);
-        setActiveChat({ id: data.id, name: data.name, isGroup: true });
+        selectChat({ id: data.id, name: data.name, isGroup: true });
         setCreateGroupModal(false);
         setNewGroupName("");
         setSelectedMembers([]);
@@ -803,6 +812,7 @@ export default function ChatPage() {
 
   function handleLogout() {
     sessionStorage.removeItem("rishyou_username");
+    sessionStorage.removeItem("rishyou_active_chat");
     router.push("/");
   }
 
@@ -964,7 +974,7 @@ export default function ChatPage() {
             const hasTimer = (chatTimers[`grp_${g.id}`] || 0) > 0;
 
             return (
-              <div key={`grp_${g.id}`} onClick={() => setActiveChat({ id: g.id, name: g.name, isGroup: true })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#9945FF]" : "hover:bg-[#202b36]"}`}>
+              <div key={`grp_${g.id}`} onClick={() => selectChat({ id: g.id, name: g.name, isGroup: true })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#9945FF]" : "hover:bg-[#202b36]"}`}>
                 <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#673AB7] flex items-center justify-center font-black text-white text-xs shadow-md flex-shrink-0">👥</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
@@ -990,7 +1000,7 @@ export default function ChatPage() {
             const hasTimer = (chatTimers[u.username] || 0) > 0;
 
             return (
-              <div key={`usr_${u.username}`} onClick={() => setActiveChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
+              <div key={`usr_${u.username}`} onClick={() => selectChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
                 <div className="relative flex-shrink-0">
                   <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] flex items-center justify-center font-black text-black text-xs shadow-md">
                     {u.username.slice(0, 2).toUpperCase()}
@@ -1025,7 +1035,7 @@ export default function ChatPage() {
           <>
             <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#242f3d] bg-[#17212b]/90 backdrop-blur-md z-10 gap-2">
               <div className="flex items-center gap-2.5 min-w-0">
-                <button onClick={() => setActiveChat(null)} className="md:hidden p-1.5 -ml-1 text-gray-400 hover:text-white rounded-lg active:bg-gray-800 cursor-pointer">
+                <button onClick={() => selectChat(null)} className="md:hidden p-1.5 -ml-1 text-gray-400 hover:text-white rounded-lg active:bg-gray-800 cursor-pointer">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
                 </button>
                 <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-xs shadow-md ${activeChat.isGroup ? "bg-gradient-to-tr from-[#9945FF] to-[#673AB7] text-white" : "bg-gradient-to-tr from-[#9945FF] to-[#14F195] text-black"}`}>
