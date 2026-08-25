@@ -4,24 +4,21 @@ import { useRouter } from "next/navigation";
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { supabase } from "@/lib/supabase";
 
-const ICE_SERVERS: RTCConfiguration = {
+const FALLBACK_ICE: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-    { urls: "stun:global.stun.twilio.com:3478" }
+    { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" }
   ],
   iceCandidatePoolSize: 10
 };
 
 const SOLANA_RPC = "https://rpc.ankr.com/solana";
 
-const AUDIO_PARAMS: MediaTrackConstraints = {
+const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: true,
-  sampleRate: 48000
+  autoGainControl: true
 };
 
 function RishyouDogIcon({ size = 32 }: { size?: number }) {
@@ -73,7 +70,6 @@ export default function ChatPage() {
   const [pendingLockedChat, setPendingLockedChat] = useState<any | null>(null);
 
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-
   const [dogMenuOpen, setDogMenuOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"privacy" | "lang" | "sound" | "theme" | "pin">("privacy");
@@ -97,8 +93,6 @@ export default function ChatPage() {
   const [lang, setLang] = useState("tr");
 
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
-  const [notificationsAllowed, setNotificationsAllowed] = useState(false);
-
   const [solPrice, setSolPrice] = useState<number>(96.40);
   const [solChange, setSolChange] = useState<string>("+1.40%");
   const [tpsCount, setTpsCount] = useState<number>(2374);
@@ -119,14 +113,13 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
-  // ARAMA VE WEBRTC MOTORU
+  // ==========================================
+  // TEKİL VE KARARLI ÇAĞRI MOTORU (STATE & REF)
+  // ==========================================
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
   const [callStatus, setCallStatus] = useState<string>("");
-  const [callDuration, setCallDuration] = useState<number>(0);
-  const [isCallActive, setIsCallActive] = useState<boolean>(false);
-  const [currentCallLogId, setCurrentCallLogId] = useState<number | null>(null);
   
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOff, setIsSpeakerOff] = useState(false);
@@ -134,15 +127,20 @@ export default function ChatPage() {
 
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
-  
+
   const activeChatRef = useRef<any>(null);
   const groupsRef = useRef<any[]>([]);
+  
+  // Çağrı oturum kontrolü
+  const activeSessionIdRef = useRef<string | null>(null);
   const currentCallPartnerRef = useRef<string | null>(null);
+  const isCallInProgressRef = useRef<boolean>(false);
+
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const iceServersRef = useRef<any>(FALLBACK_ICE);
   const iceCandidatesQueue = useRef<any[]>([]);
   const signalChannelRef = useRef<any>(null);
-  const callTimerRef = useRef<any>(null);
 
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const dialtoneRef = useRef<HTMLAudioElement | null>(null);
@@ -157,44 +155,17 @@ export default function ChatPage() {
   useEffect(() => { activeChatRef.current = activeChat; }, [activeChat]);
   useEffect(() => { groupsRef.current = groups; }, [groups]);
 
+  // Twilio TURN Sunucularını Çekme
   useEffect(() => {
-    if (typeof window !== "undefined" && "Notification" in window) {
-      if (Notification.permission === "granted") setNotificationsAllowed(true);
-      else if (Notification.permission !== "denied") {
-        Notification.requestPermission().then((p) => setNotificationsAllowed(p === "granted"));
-      }
-      if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
-    }
-  }, []);
-
-  function triggerPushNotification(title: string, body: string, isCall: boolean = false) {
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-      try {
-        if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
-          navigator.serviceWorker.controller.postMessage({ title, body, type: isCall ? "call" : "msg" });
-        } else {
-          new Notification(title, { body, icon: "/favicon.ico", vibrate: isCall ? [500, 250, 500] : [200, 100] } as any);
+    fetch("/api/turn")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.iceServers && data.iceServers.length > 0) {
+          iceServersRef.current = { iceServers: data.iceServers, iceCandidatePoolSize: 10 };
         }
-      } catch {}
-    }
-  }
-
-  useEffect(() => {
-    if (isCallActive) {
-      setCallDuration(0);
-      callTimerRef.current = setInterval(() => setCallDuration((p) => p + 1), 1000);
-    } else {
-      if (callTimerRef.current) clearInterval(callTimerRef.current);
-      setCallDuration(0);
-    }
-    return () => { if (callTimerRef.current) clearInterval(callTimerRef.current); };
-  }, [isCallActive]);
-
-  function formatCallTime(seconds: number) {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins < 10 ? "0" : ""}${mins}:${secs < 10 ? "0" : ""}${secs}`;
-  }
+      })
+      .catch(() => {});
+  }, []);
 
   function getStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
     return isGroup ? `rishyou_history_grp_${partnerOrGroupId}` : `rishyou_history_dm_${[user, partnerOrGroupId].sort().join("_")}`;
@@ -238,14 +209,6 @@ export default function ChatPage() {
     if (currentUser) {
       localStorage.setItem(`rishyou_active_chat_${currentUser}`, JSON.stringify(chat));
       if (!chat.isGroup) addChatPartner(chat.name);
-    }
-
-    if (signalChannelRef.current && currentUser && !disableReadReceipts) {
-      signalChannelRef.current.send({
-        type: "broadcast",
-        event: "read_receipt",
-        payload: { reader: currentUser, partner: chat.name }
-      });
     }
   }
 
@@ -341,24 +304,6 @@ export default function ChatPage() {
     } catch {}
   }
 
-  async function checkOfflineIncomingCalls(username: string) {
-    try {
-      const { data } = await supabase.from("call_logs").select("*").eq("receiver", username).eq("status", "calling").order("created_at", { ascending: false }).limit(1);
-      if (data && data.length > 0) {
-        const call = data[0];
-        const callTime = new Date(call.created_at).getTime();
-        if (Date.now() - callTime < 45000) {
-          currentCallPartnerRef.current = call.caller;
-          setCurrentCallLogId(call.id);
-          setIsVideoCall(call.call_type === "video");
-          setIncomingCall({ sender: call.caller, payload: "" });
-        } else {
-          await supabase.from("call_logs").update({ status: "missed" }).eq("id", call.id);
-        }
-      }
-    } catch {}
-  }
-
   useEffect(() => {
     const user = sessionStorage.getItem("rishyou_username") || localStorage.getItem("rishyou_username");
     if (!user) {
@@ -383,16 +328,13 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
       loadUserDataFromCloud(user);
-      checkOfflineIncomingCalls(user);
       initRealtimeHub(user, hideOnline);
     }
 
     const tpsInterval = setInterval(() => setTpsCount((p) => p + Math.floor(Math.random() * 11) - 5), 3000);
-    const pollInterval = setInterval(() => { if (user) checkOfflineIncomingCalls(user); }, 6000);
 
     return () => {
       clearInterval(tpsInterval);
-      clearInterval(pollInterval);
       if (signalChannelRef.current) supabase.removeChannel(signalChannelRef.current);
     };
   }, [router]);
@@ -506,7 +448,7 @@ export default function ChatPage() {
   }
 
   // ==========================================
-  // WEBRTC ÇELİK GİBİ ÇEKİRDEK MOTORU
+  // KUSURSUZ VE ÇAKIŞMASIZ REALTIME SİNYALLEŞME
   // ==========================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, { config: { broadcast: { self: false }, presence: { key: username } } });
@@ -526,30 +468,48 @@ export default function ChatPage() {
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
+      // 1. Gelen Çağrı Talebi (Offer)
       if (payload.type === "offer") {
+        if (isCallInProgressRef.current && activeSessionIdRef.current !== payload.sessionId) {
+          // Zaten bir görüşme devam ediyorsa meşgule at
+          sendSignal(payload.sender, "busy", "{}", payload.sessionId);
+          return;
+        }
+        activeSessionIdRef.current = payload.sessionId;
         currentCallPartnerRef.current = payload.sender;
         setIncomingCall(payload);
-        triggerPushNotification("📞 Gelen Arama", `@${payload.sender} sizi arıyor...`, true);
-      } else if (payload.type === "answer" && peerConnectionRef.current) {
-        try {
-          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
-          setCallStatus("Ses Hattı Bağlandı 🟢");
-          setIsCallActive(true);
+      } 
+      // 2. Çağrı Cevabı (Answer) - Yalnızca aktif oturuma aitse kabul et
+      else if (payload.type === "answer") {
+        if (activeSessionIdRef.current && payload.sessionId && activeSessionIdRef.current !== payload.sessionId) return;
+        
+        if (peerConnectionRef.current && peerConnectionRef.current.signalingState === "have-local-offer") {
+          try {
+            await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
+            setCallStatus("Ses Hattı Bağlandı 🟢");
 
-          while (iceCandidatesQueue.current.length > 0) {
-            const candidate = iceCandidatesQueue.current.shift();
-            try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
-          }
-        } catch {}
-      } else if (payload.type === "candidate") {
+            while (iceCandidatesQueue.current.length > 0) {
+              const cand = iceCandidatesQueue.current.shift();
+              try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)); } catch {}
+            }
+          } catch {}
+        }
+      } 
+      // 3. ICE Adayı
+      else if (payload.type === "candidate") {
+        if (activeSessionIdRef.current && payload.sessionId && activeSessionIdRef.current !== payload.sessionId) return;
         const candidate = JSON.parse(payload.payload);
         if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
         } else {
           iceCandidatesQueue.current.push(candidate);
         }
-      } else if (payload.type === "end") {
-        cleanupCall();
+      } 
+      // 4. Meşgul veya Sonlandırıldı
+      else if (payload.type === "end" || payload.type === "busy") {
+        if (!payload.sessionId || payload.sessionId === activeSessionIdRef.current) {
+          cleanupCall();
+        }
       }
     });
 
@@ -561,7 +521,6 @@ export default function ChatPage() {
         saveMessageLocal(username, payload.group_id, true, payload);
         if (groupsRef.current.some((g) => g.id === payload.group_id)) {
           if (cur?.isGroup && cur.id === payload.group_id) setMessages((prev) => [...prev, payload]);
-          else triggerPushNotification("👥 Yeni Grup Mesajı", `@${payload.sender}: ${payload.content}`);
         }
       } else if (payload.receiver === username) {
         saveMessageLocal(username, payload.sender, false, payload);
@@ -571,8 +530,6 @@ export default function ChatPage() {
           if (signalChannelRef.current && !disableReadReceipts) {
             signalChannelRef.current.send({ type: "broadcast", event: "read_receipt", payload: { reader: username, partner: payload.sender } });
           }
-        } else {
-          triggerPushNotification(`💬 @${payload.sender}`, payload.content);
         }
       }
     });
@@ -589,43 +546,64 @@ export default function ChatPage() {
     signalChannelRef.current = channel;
   }
 
-  function sendSignal(receiver: string, type: string, payload: string) {
+  function sendSignal(receiver: string, type: string, payload: string, sessionId?: string) {
     if (signalChannelRef.current) {
-      signalChannelRef.current.send({ type: "broadcast", event: "signal", payload: { sender: currentUser, receiver, type, payload } });
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "signal",
+        payload: {
+          sender: currentUser,
+          receiver,
+          type,
+          payload,
+          sessionId: sessionId || activeSessionIdRef.current
+        }
+      });
     }
   }
 
+  // ==========================================
+  // WEBRTC VE SES DONANIM KİLİTLEME
+  // ==========================================
   function createPeerConnection(targetUser: string) {
-    if (peerConnectionRef.current) peerConnectionRef.current.close();
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    if (peerConnectionRef.current) {
+      try { peerConnectionRef.current.close(); } catch {}
+      peerConnectionRef.current = null;
+    }
+
+    const pc = new RTCPeerConnection(iceServersRef.current);
     peerConnectionRef.current = pc;
     iceCandidatesQueue.current = [];
 
     pc.onicecandidate = (event) => {
-      if (event.candidate && targetUser) sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
+      if (event.candidate && targetUser) {
+        sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
+      }
     };
 
     pc.ontrack = (event) => {
       const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
         remoteAudioRef.current.muted = false;
         remoteAudioRef.current.play().catch(() => {});
       }
+
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream;
         remoteVideoRef.current.play().catch(() => {});
       }
+
       setCallStatus("Ses Hattı Bağlandı 🟢");
-      setIsCallActive(true);
     };
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
         setCallStatus("Ses Hattı Bağlandı 🟢");
-        setIsCallActive(true);
-      } else if (pc.connectionState === "disconnected") {
-        setCallStatus("Bağlantı Yenileniyor 🟡");
+      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        setCallStatus("Bağlantı Kesildi 🔴");
+        setTimeout(() => cleanupCall(), 2000);
       }
     };
 
@@ -634,75 +612,88 @@ export default function ChatPage() {
 
   async function startCall(video: boolean = false) {
     if (!activeChat || activeChat.isGroup || !currentUser) return;
+    
+    // Eski çağrıyı sıfırla
+    cleanupCall();
+
     const target = activeChat.name;
+    const newSessionId = `${currentUser}_${target}_${Date.now()}`;
+    activeSessionIdRef.current = newSessionId;
     currentCallPartnerRef.current = target;
+    isCallInProgressRef.current = true;
 
     setIsVideoCall(video);
     setCallModalOpen(true);
     setCallStatus(video ? "Görüntülü aranıyor..." : "Sesli aranıyor...");
-    setIsCallActive(false);
     setIsMuted(false);
     setIsSpeakerOff(false);
     setCameraOff(false);
 
-    try {
-      const { data } = await supabase.from("call_logs").insert([{ caller: currentUser, receiver: target, call_type: video ? "video" : "audio", status: "calling", created_at: new Date().toISOString() }]).select().single();
-      if (data) setCurrentCallLogId(data.id);
-    } catch {}
-
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: AUDIO_CONSTRAINTS,
+        video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
+      });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
         setIsVideoCall(false);
       } catch {
-        return setCallStatus("Mikrofon izni verilmedi!");
+        cleanupCall();
+        return alert("Mikrofon izni verilmedi!");
       }
     }
 
     localStreamRef.current = stream;
     setLocalStreamState(stream);
-    
+
     const pc = createPeerConnection(target);
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     try {
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: video });
       await pc.setLocalDescription(offer);
-      sendSignal(target, "offer", JSON.stringify(offer));
+      sendSignal(target, "offer", JSON.stringify(offer), newSessionId);
     } catch {
-      setCallStatus("Arama başlatılamadı.");
+      cleanupCall();
     }
   }
 
   async function acceptCall() {
     if (!incomingCall || !currentUser) return;
-    const caller = incomingCall.sender;
-    currentCallPartnerRef.current = caller;
 
+    const caller = incomingCall.sender;
+    const sessionId = incomingCall.sessionId;
+    const isVideo = incomingCall.payload?.includes("m=video") || false;
+
+    // Arama bildirimi temizle
+    setIncomingCall(null);
+
+    activeSessionIdRef.current = sessionId;
+    currentCallPartnerRef.current = caller;
+    isCallInProgressRef.current = true;
+
+    setIsVideoCall(isVideo);
     setCallModalOpen(true);
     setCallStatus("Bağlantı Kuruluyor...");
-    setIsCallActive(false);
     setIsMuted(false);
     setIsSpeakerOff(false);
     setCameraOff(false);
 
-    if (currentCallLogId) supabase.from("call_logs").update({ status: "answered" }).eq("id", currentCallLogId).then(() => {});
-
-    const isVideo = incomingCall.payload?.includes("m=video") || isVideoCall || false;
-    setIsVideoCall(isVideo);
-
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: AUDIO_CONSTRAINTS,
+        video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
+      });
     } catch {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
         setIsVideoCall(false);
       } catch {
-        return setCallStatus("Mikrofon hatası!");
+        cleanupCall();
+        return alert("Mikrofon izni gerekiyor!");
       }
     }
 
@@ -710,52 +701,47 @@ export default function ChatPage() {
     setLocalStreamState(stream);
 
     const pc = createPeerConnection(caller);
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     try {
-      if (incomingCall.payload) {
-        await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendSignal(caller, "answer", JSON.stringify(answer));
-      }
-      setIncomingCall(null);
+      await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendSignal(caller, "answer", JSON.stringify(answer), sessionId);
+
       setCallStatus("Ses Hattı Bağlandı 🟢");
-      setIsCallActive(true);
 
       while (iceCandidatesQueue.current.length > 0) {
         const candidate = iceCandidatesQueue.current.shift();
-        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
       }
     } catch {
-      setCallStatus("Bağlantı kurulamadı.");
+      cleanupCall();
     }
   }
 
   function cleanupCall() {
+    isCallInProgressRef.current = false;
+    activeSessionIdRef.current = null;
+    currentCallPartnerRef.current = null;
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => { t.stop(); t.enabled = false; });
       localStreamRef.current = null;
     }
     if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
+      try { peerConnectionRef.current.close(); } catch {}
       peerConnectionRef.current = null;
     }
+
     iceCandidatesQueue.current = [];
     setLocalStreamState(null);
     setCallModalOpen(false);
     setIncomingCall(null);
     setCallStatus("");
-    setIsCallActive(false);
-    currentCallPartnerRef.current = null;
     setIsMuted(false);
     setIsSpeakerOff(false);
     setCameraOff(false);
-
-    if (currentCallLogId) {
-      supabase.from("call_logs").update({ status: isCallActive ? "ended" : "missed" }).eq("id", currentCallLogId).then(() => {});
-      setCurrentCallLogId(null);
-    }
 
     if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
     if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
@@ -765,7 +751,9 @@ export default function ChatPage() {
 
   function endCall(sendEndSignal = true) {
     const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
-    if (sendEndSignal && target && currentUser) sendSignal(target, "end", "{}");
+    if (sendEndSignal && target && currentUser) {
+      sendSignal(target, "end", "{}", activeSessionIdRef.current || undefined);
+    }
     cleanupCall();
   }
 
@@ -810,7 +798,7 @@ export default function ChatPage() {
 
   async function startRecordingAudio() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_PARAMS });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
       audioChunksRef.current = [];
       let options = { mimeType: "audio/webm" };
       if (typeof MediaRecorder !== "undefined") {
@@ -937,16 +925,6 @@ export default function ChatPage() {
           </button>
 
           <div className="flex items-center gap-1 flex-shrink-0">
-            <button 
-              onClick={() => {
-                if (!notificationsAllowed) Notification.requestPermission().then((p) => setNotificationsAllowed(p === "granted"));
-                else alert("Bildirimler aktif ✔");
-              }} 
-              title={notificationsAllowed ? "Bildirimler Açık" : "Bildirim İzni Ver"} 
-              className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${notificationsAllowed ? "bg-[#242f3d] text-[#14F195]" : "bg-amber-500/20 text-amber-400 animate-pulse"}`}
-            >
-              🔔
-            </button>
             <div className="px-2 py-0.5 rounded-xl bg-[#242f3d] border border-[#14F195]/40 text-[9px] font-bold text-[#14F195] flex flex-col items-center leading-tight"><span>{tpsCount}</span><span className="text-[7px] text-gray-400 font-normal">TPS</span></div>
             <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı Mesajlar" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-yellow-400 text-xs transition-all active:scale-90 cursor-pointer">⭐</button>
             <button onClick={() => setSettingsModalOpen(true)} title="Ayarlar & Gizlilik" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-300 text-xs transition-all active:scale-90 cursor-pointer">⚙️</button>
@@ -1173,7 +1151,6 @@ export default function ChatPage() {
             <div>
               <h3 className="text-base font-black text-white">@{activeChat?.name || incomingCall?.sender || currentCallPartnerRef.current}</h3>
               <p className="text-xs text-[#14F195] font-mono mt-1 font-bold">{callStatus}</p>
-              {isCallActive && <p className="text-xs text-amber-400 font-mono mt-0.5 font-bold">⏱️ {formatCallTime(callDuration)}</p>}
             </div>
             <div className="flex justify-center flex-wrap gap-2 pt-2">
               <button onClick={() => setIsMuted(!isMuted)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isMuted ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>{isMuted ? "🔇 Mik Aç" : "🎙️ Mik Kapat"}</button>
