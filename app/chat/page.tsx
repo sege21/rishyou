@@ -9,6 +9,8 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
     { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
@@ -109,10 +111,13 @@ export default function ChatPage() {
   const [transferTarget, setTransferTarget] = useState("");
   const [txStatus, setTxStatus] = useState("");
 
+  // ARAMA VE WEBRTC MOTORU STATE'LERİ
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [incomingCall, setIncomingCall] = useState<any | null>(null);
   const [callStatus, setCallStatus] = useState<string>("");
+  const [callDuration, setCallDuration] = useState<number>(0);
+  const [isCallActive, setIsCallActive] = useState<boolean>(false);
   
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOff, setIsSpeakerOff] = useState(false);
@@ -126,8 +131,9 @@ export default function ChatPage() {
   const currentCallPartnerRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const iceCandidateQueue = useRef<any[]>([]);
+  const iceCandidatesQueue = useRef<any[]>([]);
   const signalChannelRef = useRef<any>(null);
+  const callTimerRef = useRef<any>(null);
 
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const dialtoneRef = useRef<HTMLAudioElement | null>(null);
@@ -147,7 +153,28 @@ export default function ChatPage() {
     groupsRef.current = groups;
   }, [groups]);
 
-  // %100 GÜVENLİ VE KALICI DISK HAFIZASI
+  // Arama Süresi Sayacı
+  useEffect(() => {
+    if (isCallActive) {
+      setCallDuration(0);
+      callTimerRef.current = setInterval(() => {
+        setCallDuration((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (callTimerRef.current) clearInterval(callTimerRef.current);
+      setCallDuration(0);
+    }
+    return () => {
+      if (callTimerRef.current) clearInterval(callTimerRef.current);
+    };
+  }, [isCallActive]);
+
+  function formatCallTime(seconds: number) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins < 10 ? "0" : ""}${mins}:${secs < 10 ? "0" : ""}${secs}`;
+  }
+
   function getStorageKey(user: string, partnerOrGroupId: string, isGroup: boolean) {
     if (isGroup) return `rishyou_history_grp_${partnerOrGroupId}`;
     const pair = [user, partnerOrGroupId].sort().join("_");
@@ -365,13 +392,13 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
+      localStreamRef.current.getAudioTracks().forEach((track) => { track.enabled = !isMuted; });
     }
   }, [isMuted]);
 
   useEffect(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = !cameraOff; });
+      localStreamRef.current.getVideoTracks().forEach((track) => { track.enabled = !cameraOff; });
     }
   }, [cameraOff]);
 
@@ -393,7 +420,6 @@ export default function ChatPage() {
     }
   }, [callStatus, soundEnabled]);
 
-  // SOHBET DEĞİŞİNCE VEYA YENİLENDİĞİNDE MESAJLARI DİSKTEN + BULUTTAN YÜKLE
   useEffect(() => {
     if (!currentUser || !activeChat) return;
 
@@ -442,13 +468,10 @@ export default function ChatPage() {
     } catch {}
   }
 
-  // 400 HATASI VERMEYEN KUSURSUZ MESAJ YÜKLEME
   async function loadDirectMessages(u1: string, u2: string) { 
-    // 1. Önce diski oku (0ms gecikme, yenileyince ASLA kaybolmaz)
     const localMsgs = getMessagesLocal(u1, u2, false);
     setMessages(localMsgs);
 
-    // 2. Buluttan çek ve birleştir
     try {
       const { data, error } = await supabase
         .from("messages")
@@ -521,6 +544,9 @@ export default function ChatPage() {
     } catch {}
   }
 
+  // ==========================================
+  // GELİŞMİŞ WEBRTC VE SİNYALLEŞME MOTORU
+  // ==========================================
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
       config: { 
@@ -545,6 +571,7 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
+    // GELEN ARAMA SİNYAL DİNLENMESİ
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
@@ -552,18 +579,25 @@ export default function ChatPage() {
         currentCallPartnerRef.current = payload.sender;
         setIncomingCall(payload);
       } else if (payload.type === "answer" && peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
-        setCallStatus("Ses Hattı Bağlandı 🟢");
-        while (iceCandidateQueue.current.length > 0) {
-          const candidate = iceCandidateQueue.current.shift();
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
+        try {
+          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(JSON.parse(payload.payload)));
+          setCallStatus("Bağlandı 🟢");
+          setIsCallActive(true);
+
+          // Biriken ICE adaylarını boşalt
+          while (iceCandidatesQueue.current.length > 0) {
+            const candidate = iceCandidatesQueue.current.shift();
+            try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+          }
+        } catch (e) {
+          console.error("Answer hatası:", e);
         }
       } else if (payload.type === "candidate") {
         const candidate = JSON.parse(payload.payload);
         if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
           try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
         } else {
-          iceCandidateQueue.current.push(candidate);
+          iceCandidatesQueue.current.push(candidate);
         }
       } else if (payload.type === "end") {
         cleanupCall();
@@ -631,7 +665,190 @@ export default function ChatPage() {
     }
   }
 
-  // ANLIK VE ÇİFT KATMANLI KALICI MESAJ GÖNDERME
+  function createPeerConnection(targetUser: string) {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+    }
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    peerConnectionRef.current = pc;
+    iceCandidatesQueue.current = [];
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate && targetUser) {
+        sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
+      }
+    };
+
+    pc.ontrack = (event) => {
+      const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = stream;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.play().catch(() => {});
+      }
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = stream;
+        remoteVideoRef.current.play().catch(() => {});
+      }
+      setCallStatus("Bağlandı 🟢");
+      setIsCallActive(true);
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") {
+        setCallStatus("Bağlandı 🟢");
+        setIsCallActive(true);
+      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        setCallStatus("Bağlantı Koptu 🔴");
+        setTimeout(() => cleanupCall(), 1500);
+      }
+    };
+
+    return pc;
+  }
+
+  async function startCall(video: boolean = false) {
+    if (!activeChat || activeChat.isGroup || !currentUser) return;
+    const target = activeChat.name;
+    currentCallPartnerRef.current = target;
+
+    setIsVideoCall(video);
+    setCallModalOpen(true);
+    setCallStatus(video ? "Görüntülü aranıyor..." : "Sesli aranıyor...");
+    setIsCallActive(false);
+    setIsMuted(false);
+    setIsSpeakerOff(false);
+    setCameraOff(false);
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: video ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
+      });
+    } catch {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        setIsVideoCall(false);
+      } catch {
+        setCallStatus("Mikrofon izni verilmedi!");
+        return;
+      }
+    }
+
+    localStreamRef.current = stream;
+    setLocalStreamState(stream);
+    
+    const pc = createPeerConnection(target);
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+    try {
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: video });
+      await pc.setLocalDescription(offer);
+      sendSignal(target, "offer", JSON.stringify(offer));
+    } catch {
+      setCallStatus("Arama başlatılamadı.");
+    }
+  }
+
+  async function acceptCall() {
+    if (!incomingCall || !currentUser) return;
+    const caller = incomingCall.sender;
+    currentCallPartnerRef.current = caller;
+
+    setCallModalOpen(true);
+    setCallStatus("Bağlantı Kuruluyor...");
+    setIsCallActive(false);
+    setIsMuted(false);
+    setIsSpeakerOff(false);
+    setCameraOff(false);
+
+    const isVideo = incomingCall.payload?.includes("m=video") || false;
+    setIsVideoCall(isVideo);
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false
+      });
+    } catch {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        setIsVideoCall(false);
+      } catch {
+        setCallStatus("Mikrofon hatası!");
+        return;
+      }
+    }
+
+    localStreamRef.current = stream;
+    setLocalStreamState(stream);
+
+    const pc = createPeerConnection(caller);
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      sendSignal(caller, "answer", JSON.stringify(answer));
+      
+      setIncomingCall(null);
+      setCallStatus("Bağlandı 🟢");
+      setIsCallActive(true);
+
+      while (iceCandidatesQueue.current.length > 0) {
+        const candidate = iceCandidatesQueue.current.shift();
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+      }
+    } catch {
+      setCallStatus("Bağlantı kurulamadı.");
+    }
+  }
+
+  function cleanupCall() {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => {
+        t.stop();
+        t.enabled = false;
+      });
+      localStreamRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    iceCandidatesQueue.current = [];
+    setLocalStreamState(null);
+    setCallModalOpen(false);
+    setIncomingCall(null);
+    setCallStatus("");
+    setIsCallActive(false);
+    currentCallPartnerRef.current = null;
+    setIsMuted(false);
+    setIsSpeakerOff(false);
+    setCameraOff(false);
+
+    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
+    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
+    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
+    if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
+  }
+
+  function endCall(sendEndSignal = true) {
+    const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
+    if (sendEndSignal && target && currentUser) {
+      sendSignal(target, "end", "{}");
+    }
+    cleanupCall();
+  }
+
+  // ==========================================
+  // MESAJ GÖNDERME VE SES KAYIT
+  // ==========================================
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -653,10 +870,8 @@ export default function ChatPage() {
       is_read: false
     };
 
-    // 1. Ekrana bas
     setMessages((prev) => [...prev, newMsg]);
 
-    // 2. Diske mühürle
     const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
     saveMessageLocal(currentUser, targetId, activeChat.isGroup, newMsg);
 
@@ -664,7 +879,6 @@ export default function ChatPage() {
       addChatPartner(activeChat.name);
     }
 
-    // 3. Karşı tarafa fırlat
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -673,7 +887,6 @@ export default function ChatPage() {
       });
     }
 
-    // 4. Supabase'e kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
@@ -768,176 +981,6 @@ export default function ChatPage() {
     setSelectedMembers((prev) => 
       prev.includes(username) ? prev.filter((u) => u !== username) : [...prev, username]
     );
-  }
-
-  function createPeerConnection(targetUser: string) {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-    }
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-    peerConnectionRef.current = pc;
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate && targetUser) {
-        sendSignal(targetUser, "candidate", JSON.stringify(event.candidate));
-      }
-    };
-
-    pc.ontrack = (event) => {
-      const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = stream;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.play().catch(() => {});
-      }
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = stream;
-        remoteVideoRef.current.play().catch(() => {});
-      }
-      setCallStatus("Ses Hattı Bağlandı 🟢");
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") setCallStatus("Görüşme Aktif 🟢");
-      else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") setCallStatus("Bağlantı Koptu 🔴");
-    };
-
-    return pc;
-  }
-
-  async function startCall(video: boolean = false) {
-    if (!activeChat || activeChat.isGroup || !currentUser) return;
-    const target = activeChat.name;
-    currentCallPartnerRef.current = target;
-
-    setIsVideoCall(video);
-    setCallModalOpen(true);
-    setCallStatus(video ? "Görüntülü aranıyor..." : "Sesli aranıyor...");
-    iceCandidateQueue.current = [];
-    setIsMuted(false);
-    setIsSpeakerOff(false);
-    setCameraOff(false);
-
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: video ? { width: { ideal: 640 }, height: { ideal: 480 } } : false
-      });
-    } catch {
-      if (video) {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        setIsVideoCall(false);
-      } else {
-        setCallStatus("Mikrofon izni verilmedi!");
-        return;
-      }
-    }
-
-    localStreamRef.current = stream;
-    setLocalStreamState(stream);
-    
-    const pc = createPeerConnection(target);
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-    try {
-      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: video });
-      await pc.setLocalDescription(offer);
-      sendSignal(target, "offer", JSON.stringify(offer));
-    } catch {
-      setCallStatus("Arama başlatılamadı.");
-    }
-  }
-
-  async function acceptCall() {
-    if (!incomingCall || !currentUser) return;
-    const caller = incomingCall.sender;
-    currentCallPartnerRef.current = caller;
-
-    setCallModalOpen(true);
-    setCallStatus("Bağlantı Kuruluyor...");
-    setIsMuted(false);
-    setIsSpeakerOff(false);
-    setCameraOff(false);
-
-    const isVideo = incomingCall.payload?.includes("m=video") || false;
-    setIsVideoCall(isVideo);
-
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: isVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false
-      });
-    } catch {
-      if (isVideo) {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        setIsVideoCall(false);
-      } else {
-        setCallStatus("Mikrofon hatası!");
-        return;
-      }
-    }
-
-    localStreamRef.current = stream;
-    setLocalStreamState(stream);
-
-    const pc = createPeerConnection(caller);
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-    try {
-      await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(incomingCall.payload)));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      sendSignal(caller, "answer", JSON.stringify(answer));
-      
-      setIncomingCall(null);
-      setCallStatus("Ses Hattı Bağlandı 🟢");
-
-      while (iceCandidateQueue.current.length > 0) {
-        const candidate = iceCandidateQueue.current.shift();
-        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
-      }
-    } catch {
-      setCallStatus("Bağlantı kurulamadı.");
-    }
-  }
-
-  function cleanupCall() {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => {
-        t.stop();
-        t.enabled = false;
-      });
-      localStreamRef.current = null;
-    }
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-    iceCandidateQueue.current = [];
-    setLocalStreamState(null);
-    setCallModalOpen(false);
-    setIncomingCall(null);
-    setCallStatus("");
-    currentCallPartnerRef.current = null;
-    setIsMuted(false);
-    setIsSpeakerOff(false);
-    setCameraOff(false);
-
-    if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
-    if (dialtoneRef.current) { dialtoneRef.current.pause(); dialtoneRef.current.currentTime = 0; }
-    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
-    if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
-  }
-
-  function endCall(sendEndSignal = true) {
-    const target = currentCallPartnerRef.current || (activeChat && !activeChat.isGroup ? activeChat.name : null) || (incomingCall ? incomingCall.sender : null);
-    if (sendEndSignal && target && currentUser) {
-      sendSignal(target, "end", "{}");
-    }
-    cleanupCall();
   }
 
   function handleLogout() {
@@ -1325,6 +1368,68 @@ export default function ChatPage() {
         )}
       </main>
 
+      {/* ARAMA VE GÖRÜŞME EKRANI MODALI */}
+      {callModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/95 backdrop-blur-xl">
+          <div className="w-full max-w-md bg-[#17212b] border border-[#14F195]/40 rounded-3xl p-5 text-center space-y-4 shadow-2xl">
+            
+            <div className={`relative w-full bg-black rounded-2xl overflow-hidden ${isVideoCall ? "h-64 border border-gray-700" : "hidden"}`}>
+              <video ref={remoteVideoRef} autoPlay playsInline muted={isSpeakerOff} className="w-full h-full object-cover" />
+              <video ref={localVideoRef} autoPlay playsInline muted className="absolute bottom-2 right-2 w-24 h-20 object-cover rounded-xl border-2 border-[#14F195]" />
+            </div>
+
+            {!isVideoCall && (
+              <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] mx-auto flex items-center justify-center text-3xl shadow-lg animate-pulse">
+                📞
+              </div>
+            )}
+            
+            <div>
+              <h3 className="text-base font-black text-white">@{activeChat?.name || incomingCall?.sender || currentCallPartnerRef.current}</h3>
+              <p className="text-xs text-[#14F195] font-mono mt-1 font-bold">{callStatus}</p>
+              {isCallActive && (
+                <p className="text-xs text-amber-400 font-mono mt-0.5 font-bold">⏱️ {formatCallTime(callDuration)}</p>
+              )}
+            </div>
+            
+            <div className="flex justify-center flex-wrap gap-2 pt-2">
+              <button onClick={() => setIsMuted(!isMuted)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isMuted ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>
+                {isMuted ? "🔇 Mik Aç" : "🎙️ Mik Kapat"}
+              </button>
+              <button onClick={() => setIsSpeakerOff(!isSpeakerOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${isSpeakerOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>
+                {isSpeakerOff ? "🔇 Hoparlör Aç" : "🔊 Hoparlör Kapat"}
+              </button>
+              {isVideoCall && (
+                <button onClick={() => setCameraOff(!cameraOff)} className={`p-3 rounded-2xl text-xs font-bold cursor-pointer transition-all active:scale-90 ${cameraOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white hover:bg-[#324154]"}`}>
+                  {cameraOff ? "📹 Kamera Aç" : "🚫 Kamera Kapat"}
+                </button>
+              )}
+              <button onClick={() => endCall(true)} className="p-3 px-5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-black active:scale-95 cursor-pointer shadow-lg shadow-red-500/30">
+                🔴 Sonlandır
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GELEN ARAMA BİLDİRİMİ */}
+      {incomingCall && (
+        <div className="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:w-84 z-50 bg-[#17212b] border-2 border-[#14F195] rounded-3xl p-4 shadow-2xl flex items-center justify-between animate-bounce">
+          <div>
+            <h4 className="text-xs font-black text-white">Gelen Arama</h4>
+            <p className="text-xs text-[#14F195] font-bold">@{incomingCall.sender}</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={acceptCall} className="py-2 px-3 bg-[#14F195] text-black rounded-xl text-xs font-black cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">
+              Cevapla
+            </button>
+            <button onClick={() => endCall(true)} className="py-2 px-3 bg-red-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md hover:scale-105 active:scale-95 transition-transform">
+              Reddet
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* PIN GİRİŞ MODALI */}
       {pinPromptModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/85 backdrop-blur-md">
@@ -1556,54 +1661,6 @@ export default function ChatPage() {
             <input type="number" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} placeholder="Miktar ($RISH)" className="w-full bg-[#242f3d] border border-gray-700 text-xs text-white p-2 rounded-xl focus:outline-none focus:border-[#14F195]" />
             <button onClick={() => { setRishBalance(prev => Math.max(0, prev - Number(transferAmount))); setTxStatus("Transfer Başarılı!"); }} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer">Transfer Et</button>
             {txStatus && <p className="text-[10px] text-center text-[#14F195]">{txStatus}</p>}
-          </div>
-        </div>
-      )}
-
-      {/* ARAMA EKRANI MODALI */}
-      {callModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/90 backdrop-blur-xl">
-          <div className="w-full max-w-md bg-[#17212b] border border-gray-700 rounded-3xl p-5 text-center space-y-3 shadow-2xl">
-            
-            <div className={`relative w-full bg-black rounded-2xl overflow-hidden ${isVideoCall ? "h-56 border border-gray-700" : "hidden"}`}>
-              <video ref={remoteVideoRef} playsInline muted={isSpeakerOff} className="w-full h-full object-cover" />
-              <video ref={localVideoRef} autoPlay playsInline muted className="absolute bottom-2 right-2 w-24 h-20 object-cover rounded-xl border border-[#14F195]" />
-            </div>
-
-            {!isVideoCall && (
-              <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] mx-auto flex items-center justify-center text-2xl shadow-lg animate-pulse">📞</div>
-            )}
-            
-            <h3 className="text-sm font-bold text-white">@{activeChat?.name || incomingCall?.sender || currentCallPartnerRef.current}</h3>
-            <p className="text-xs text-[#14F195] font-mono">{callStatus}</p>
-            
-            <div className="flex justify-center flex-wrap gap-2 pt-1">
-              <button onClick={() => setIsMuted(!isMuted)} className={`p-2.5 px-3 rounded-xl text-[11px] font-bold cursor-pointer ${isMuted ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white"}`}>
-                {isMuted ? "🔇 Mik Aç" : "🎙️ Mik Kapat"}
-              </button>
-              <button onClick={() => setIsSpeakerOff(!isSpeakerOff)} className={`p-2.5 px-3 rounded-xl text-[11px] font-bold cursor-pointer ${isSpeakerOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white"}`}>
-                {isSpeakerOff ? "🔇 Hoparlör Aç" : "🔊 Hoparlör Kapat"}
-              </button>
-              {isVideoCall && (
-                <button onClick={() => setCameraOff(!cameraOff)} className={`p-2.5 px-3 rounded-xl text-[11px] font-bold cursor-pointer ${cameraOff ? "bg-amber-500 text-black" : "bg-[#242f3d] text-white"}`}>
-                  {cameraOff ? "📹 Kamera Aç" : "🚫 Kamera Kapat"}
-                </button>
-              )}
-              <button onClick={() => endCall(true)} className="p-2.5 px-4 bg-red-500 hover:bg-red-600 text-white rounded-xl text-[11px] font-bold active:scale-95 cursor-pointer">
-                🔴 Sonlandır
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* GELEN ARAMA BİLDİRİMİ */}
-      {incomingCall && (
-        <div className="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:w-80 z-50 bg-[#17212b] border-2 border-[#14F195] rounded-3xl p-4 shadow-2xl flex items-center justify-between animate-bounce">
-          <div><h4 className="text-xs font-black text-white">Gelen Arama</h4><p className="text-xs text-[#14F195]">@{incomingCall.sender}</p></div>
-          <div className="flex gap-1.5">
-            <button onClick={acceptCall} className="p-2.5 bg-[#14F195] text-black rounded-xl text-xs font-black cursor-pointer">Cevapla</button>
-            <button onClick={() => endCall(true)} className="p-2.5 bg-red-500 text-white rounded-xl text-xs font-bold cursor-pointer">Reddet</button>
           </div>
         </div>
       )}
