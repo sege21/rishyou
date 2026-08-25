@@ -69,11 +69,9 @@ export default function ChatPage() {
   const [storyModalOpen, setStoryModalOpen] = useState(false);
   const [activeStoryView, setActiveStoryView] = useState<any | null>(null);
 
-  // SOHBETE ÖZEL ZAMANLAYICI MODALI & VERİSİ
   const [chatTimerModalOpen, setChatTimerModalOpen] = useState(false);
-  const [chatTimers, setChatTimers] = useState<Record<string, number>>({}); // chatId -> saat (0: kapalı, 1, 24, 168)
+  const [chatTimers, setChatTimers] = useState<Record<string, number>>({});
 
-  // KULLANICIYA ÖZEL GENEL AYARLAR
   const [hideOnline, setHideOnline] = useState(false);
   const [disableReadReceipts, setDisableReadReceipts] = useState(false);
   const [screenshotProtection, setScreenshotProtection] = useState(false);
@@ -81,7 +79,6 @@ export default function ChatPage() {
   const [appPin, setAppPin] = useState("");
   const [lang, setLang] = useState("tr");
 
-  // ÇEVRİM İÇİ / SON GÖRÜLME HARİTASI
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
 
   const [solPrice, setSolPrice] = useState<number>(96.40);
@@ -153,14 +150,12 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
 
-      // KULLANICIYA ÖZEL KASA VE PİNLER
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
 
       const savedPins = localStorage.getItem(`rishyou_pins_${user}`);
       if (savedPins) setPinnedChats(JSON.parse(savedPins));
 
-      // SOHBETLERE ÖZEL SİLME SÜRELERİNİ YÜKLE
       const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user}`);
       if (savedTimers) {
         try { setChatTimers(JSON.parse(savedTimers)); } catch {}
@@ -314,6 +309,46 @@ export default function ChatPage() {
     } catch {}
   }
 
+  // KESİN VE KALICI DİREKT MESAJ YÜKLEYİCİ
+  async function loadDirectMessages(u1: string, u2: string) { 
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .or(`sender.eq.${u1},receiver.eq.${u1}`)
+        .order("created_at", { ascending: true }); 
+
+      if (!error && data) {
+        const filtered = data.filter(
+          (m: any) =>
+            (m.sender === u1 && m.receiver === u2) ||
+            (m.sender === u2 && m.receiver === u1)
+        );
+        setMessages(filtered);
+      }
+    } catch (e) {
+      console.error("Mesaj yükleme hatası:", e);
+    }
+  }
+
+  async function loadGroupMessages(groupId: string) { 
+    const isMember = groupsRef.current.some((g) => g.id === groupId);
+    if (!isMember) {
+      setMessages([]);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("group_messages")
+        .select("*")
+        .eq("group_id", groupId)
+        .order("created_at", { ascending: true }); 
+      if (!error && data) setMessages(data); 
+    } catch (e) {
+      console.error("Grup mesaj hatası:", e);
+    }
+  }
+
   async function loadWalletData(username: string) {
     const { data } = await supabase.from("users").select("wallet_address").eq("username", username).single();
     if (data && data.wallet_address) {
@@ -325,21 +360,6 @@ export default function ChatPage() {
         setSolBalance(bal / LAMPORTS_PER_SOL);
       } catch { setSolBalance(0); }
     }
-  }
-
-  async function loadDirectMessages(u1: string, u2: string) { 
-    const { data } = await supabase.from("messages").select("*").or(`and(sender.eq.${u1},receiver.eq.${u2}),and(sender.eq.${u2},receiver.eq.${u1})`).order("created_at", { ascending: true }); 
-    if (data) setMessages(data); 
-  }
-
-  async function loadGroupMessages(groupId: string) { 
-    const isMember = groupsRef.current.some((g) => g.id === groupId);
-    if (!isMember) {
-      setMessages([]);
-      return;
-    }
-    const { data } = await supabase.from("group_messages").select("*").eq("group_id", groupId).order("created_at", { ascending: true }); 
-    if (data) setMessages(data); 
   }
 
   function initRealtimeHub(username: string, isHideOnline: boolean) {
@@ -433,6 +453,7 @@ export default function ChatPage() {
     }
   }
 
+  // KALICI VE ANLIK MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -482,7 +503,7 @@ export default function ChatPage() {
         }
       }
     } catch (e) {
-      console.error("Veritabanı kayıt hatası:", e);
+      console.error("Mesaj veritabanı kayıt hatası:", e);
     }
   }
 
@@ -749,11 +770,9 @@ export default function ChatPage() {
     return aPin === bPin ? 0 : aPin ? -1 : 1;
   });
 
-  // BU SOHBETE ÖZEL ZAMANLAYICI KONTROLÜ
   const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name) : "";
   const currentChatTimerHours = currentChatKey ? (chatTimers[currentChatKey] || 0) : 0;
 
-  // SADECE BU SOHBETTE ZAMANLAYICI AKTİFSE MESAJLARI FİLTRELE
   const displayMessages = messages.filter((m) => {
     if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
     const msgTime = new Date(m.created_at).getTime();
@@ -958,7 +977,6 @@ export default function ChatPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                {/* SOHBETE ÖZEL SÜRELİ MESAJ BUTONU */}
                 <button 
                   onClick={() => setChatTimerModalOpen(true)} 
                   title="Sadece Bu Sohbet İçin Mesaj Silme Süresi" 
