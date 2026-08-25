@@ -69,16 +69,19 @@ export default function ChatPage() {
   const [storyModalOpen, setStoryModalOpen] = useState(false);
   const [activeStoryView, setActiveStoryView] = useState<any | null>(null);
 
-  // KULLANICIYA ÖZEL GİZLİLİK VE AYARLAR
+  // SOHBETE ÖZEL ZAMANLAYICI MODALI & VERİSİ
+  const [chatTimerModalOpen, setChatTimerModalOpen] = useState(false);
+  const [chatTimers, setChatTimers] = useState<Record<string, number>>({}); // chatId -> saat (0: kapalı, 1, 24, 168)
+
+  // KULLANICIYA ÖZEL GENEL AYARLAR
   const [hideOnline, setHideOnline] = useState(false);
   const [disableReadReceipts, setDisableReadReceipts] = useState(false);
   const [screenshotProtection, setScreenshotProtection] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [autoDelete24h, setAutoDelete24h] = useState(false);
   const [appPin, setAppPin] = useState("");
   const [lang, setLang] = useState("tr");
 
-  // ÇEVRİM İÇİ & SON GÖRÜLME DURUM HARİTASI
+  // ÇEVRİM İÇİ / SON GÖRÜLME HARİTASI
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean; lastSeen?: string }>>({});
 
   const [solPrice, setSolPrice] = useState<number>(96.40);
@@ -150,12 +153,18 @@ export default function ChatPage() {
       loadWalletData(user);
       loadChatPartners(user);
 
-      // KULLANICIYA ÖZEL KASA VE AYARLARI YÜKLE
+      // KULLANICIYA ÖZEL KASA VE PİNLER
       const savedVault = localStorage.getItem(`rishyou_vault_${user}`);
       if (savedVault) setVaultNotes(JSON.parse(savedVault));
 
       const savedPins = localStorage.getItem(`rishyou_pins_${user}`);
       if (savedPins) setPinnedChats(JSON.parse(savedPins));
+
+      // SOHBETLERE ÖZEL SİLME SÜRELERİNİ YÜKLE
+      const savedTimers = localStorage.getItem(`rishyou_chat_timers_${user}`);
+      if (savedTimers) {
+        try { setChatTimers(JSON.parse(savedTimers)); } catch {}
+      }
 
       let userHideOnline = false;
       const savedSettings = localStorage.getItem(`rishyou_settings_${user}`);
@@ -169,7 +178,6 @@ export default function ChatPage() {
           if (parsed.disableReadReceipts !== undefined) setDisableReadReceipts(parsed.disableReadReceipts);
           if (parsed.screenshotProtection !== undefined) setScreenshotProtection(parsed.screenshotProtection);
           if (parsed.soundEnabled !== undefined) setSoundEnabled(parsed.soundEnabled);
-          if (parsed.autoDelete24h !== undefined) setAutoDelete24h(parsed.autoDelete24h);
           if (parsed.appPin !== undefined) setAppPin(parsed.appPin);
           if (parsed.lang !== undefined) setLang(parsed.lang);
         } catch {}
@@ -188,6 +196,15 @@ export default function ChatPage() {
     };
   }, [router]);
 
+  function setAutoDeleteForCurrentChat(hours: number) {
+    if (!currentUser || !activeChat) return;
+    const chatKey = activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name;
+    const updated = { ...chatTimers, [chatKey]: hours };
+    setChatTimers(updated);
+    localStorage.setItem(`rishyou_chat_timers_${currentUser}`, JSON.stringify(updated));
+    setChatTimerModalOpen(false);
+  }
+
   function saveUserSettings(updated: any) {
     if (!currentUser) return;
     const settings = {
@@ -195,7 +212,6 @@ export default function ChatPage() {
       disableReadReceipts,
       screenshotProtection,
       soundEnabled,
-      autoDelete24h,
       appPin,
       lang,
       ...updated
@@ -326,7 +342,6 @@ export default function ChatPage() {
     if (data) setMessages(data); 
   }
 
-  // ANLIK VE İZOLE REALTIME + ÇEVRİM İÇİ / SON GÖRÜLME TAKİBİ
   function initRealtimeHub(username: string, isHideOnline: boolean) {
     const channel = supabase.channel(`rishyou_realtime_hub`, {
       config: { 
@@ -335,7 +350,6 @@ export default function ChatPage() {
       }
     });
 
-    // 1. Çevrim İçi ve Son Görülme Durumları
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState();
       const updatedMap: Record<string, { online: boolean; lastSeen?: string }> = {};
@@ -352,7 +366,6 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // 2. Arama Sinyalleri
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver !== username) return;
 
@@ -378,7 +391,6 @@ export default function ChatPage() {
       }
     });
 
-    // 3. İzole Mesajlaşma
     channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
       if (!payload) return;
       const cur = activeChatRef.current;
@@ -737,12 +749,16 @@ export default function ChatPage() {
     return aPin === bPin ? 0 : aPin ? -1 : 1;
   });
 
-  // 24 SAAT SONRA OTOMATİK MESAJ FİLTRELEME
+  // BU SOHBETE ÖZEL ZAMANLAYICI KONTROLÜ
+  const currentChatKey = activeChat ? (activeChat.isGroup ? `grp_${activeChat.id}` : activeChat.name) : "";
+  const currentChatTimerHours = currentChatKey ? (chatTimers[currentChatKey] || 0) : 0;
+
+  // SADECE BU SOHBETTE ZAMANLAYICI AKTİFSE MESAJLARI FİLTRELE
   const displayMessages = messages.filter((m) => {
-    if (!autoDelete24h) return true;
+    if (!currentChatTimerHours || currentChatTimerHours === 0) return true;
     const msgTime = new Date(m.created_at).getTime();
     const now = Date.now();
-    return (now - msgTime) < 24 * 60 * 60 * 1000;
+    return (now - msgTime) < currentChatTimerHours * 60 * 60 * 1000;
   });
 
   function getUserOnlineStatus(username: string) {
@@ -852,11 +868,13 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* SADECE KULLANICIYA ÖZEL GRUPLAR VE SOHBETLER */}
+        {/* LİSTELER */}
         <div className="flex-1 overflow-y-auto px-2 space-y-1 pb-4">
           {(tabFilter === "all" || tabFilter === "groups") && sortedGroups.map((g) => {
             const isSelected = activeChat?.isGroup && activeChat.id === g.id;
             const isPinned = pinnedChats.includes(g.id);
+            const hasTimer = (chatTimers[`grp_${g.id}`] || 0) > 0;
+
             return (
               <div key={`grp_${g.id}`} onClick={() => setActiveChat({ id: g.id, name: g.name, isGroup: true })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#9945FF]" : "hover:bg-[#202b36]"}`}>
                 <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#673AB7] flex items-center justify-center font-black text-white text-xs shadow-md flex-shrink-0">👥</div>
@@ -864,6 +882,7 @@ export default function ChatPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white truncate">{g.name}</span>
                     <div className="flex items-center gap-1.5">
+                      {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
                       <button onClick={(e) => togglePin(g.id, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
                       <span className="text-[9px] bg-[#9945FF]/30 text-[#AB9FF2] px-1.5 py-0.5 rounded font-bold">Özel Grup</span>
                     </div>
@@ -880,6 +899,7 @@ export default function ChatPage() {
             const isSelected = !activeChat?.isGroup && activeChat?.name === u.username;
             const isPinned = pinnedChats.includes(u.username);
             const statusInfo = getUserOnlineStatus(u.username);
+            const hasTimer = (chatTimers[u.username] || 0) > 0;
 
             return (
               <div key={`usr_${u.username}`} onClick={() => setActiveChat({ id: u.username, name: u.username, isGroup: false })} className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all active:scale-[0.98] ${isSelected ? "bg-[#242f3d] border-l-4 border-[#14F195]" : "hover:bg-[#202b36]"}`}>
@@ -895,6 +915,7 @@ export default function ChatPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white truncate">@{u.username}</span>
                     <div className="flex items-center gap-1.5">
+                      {hasTimer && <span className="text-[10px]" title="Süreli Mesajlar Aktif">⏱️</span>}
                       <button onClick={(e) => togglePin(u.username, e)} className={`text-[11px] ${isPinned ? "text-[#14F195] opacity-100" : "text-gray-500 opacity-0 group-hover:opacity-100"} transition-opacity hover:scale-125`}>📌</button>
                       <span className={`text-[9px] ${statusInfo.isOnline ? "text-[#14F195] font-bold" : "text-gray-500"}`}>
                         {statusInfo.text}
@@ -928,13 +949,24 @@ export default function ChatPage() {
                     <span className="text-[10px] text-[#14F195]">
                       {activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}
                     </span>
-                    {autoDelete24h && (
-                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.2 rounded font-medium">⏱️ 24s Silme Aktif</span>
+                    {currentChatTimerHours > 0 && (
+                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.2 rounded font-bold">
+                        ⏱️ {currentChatTimerHours === 24 ? "24s Silme" : currentChatTimerHours === 1 ? "1s Silme" : "7g Silme"}
+                      </span>
                     )}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
+                {/* SOHBETE ÖZEL SÜRELİ MESAJ BUTONU */}
+                <button 
+                  onClick={() => setChatTimerModalOpen(true)} 
+                  title="Sadece Bu Sohbet İçin Mesaj Silme Süresi" 
+                  className={`p-1.5 rounded-xl text-xs transition-all active:scale-90 cursor-pointer ${currentChatTimerHours > 0 ? "bg-amber-500/20 text-amber-400 border border-amber-500/40" : "bg-[#242f3d] hover:bg-[#2b394a] text-gray-300"}`}
+                >
+                  ⏱️
+                </button>
+
                 <button onClick={() => setVaultModalOpen(true)} title="Kasa" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">📁</button>
                 <button onClick={() => setQrModalOpen(true)} title="QR Kod" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">🎴</button>
                 <button onClick={() => setStarredModalOpen(true)} title="Yıldızlı" className="p-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-xs cursor-pointer">⭐</button>
@@ -1017,6 +1049,41 @@ export default function ChatPage() {
         )}
       </main>
 
+      {/* SOHBETE ÖZEL SÜRELİ MESAJLAR MODALI */}
+      {chatTimerModalOpen && activeChat && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-[#17212b] border border-amber-500/40 rounded-3xl p-5 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-700 pb-2">
+              <h3 className="text-xs font-black text-amber-400 flex items-center gap-1.5">
+                <span>⏱️</span> Süreli Mesajlar ({activeChat.isGroup ? activeChat.name : `@${activeChat.name}`})
+              </h3>
+              <button onClick={() => setChatTimerModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button>
+            </div>
+            <p className="text-[11px] text-gray-400">
+              Bu sohbet için seçilen süreden eski mesajlar otomatik olarak temizlenir. Diğer kişilerle olan konuşmalarınız etkilenmez.
+            </p>
+            <div className="space-y-1.5">
+              {[
+                { label: "Kapalı (Mesajlar Silinmez)", hours: 0 },
+                { label: "1 Saat Sonra Sil", hours: 1 },
+                { label: "24 Saat Sonra Sil (Önerilen)", hours: 24 },
+                { label: "7 Gün Sonra Sil", hours: 168 }
+              ].map((opt) => (
+                <button
+                  key={opt.hours}
+                  onClick={() => setAutoDeleteForCurrentChat(opt.hours)}
+                  className={`w-full p-2.5 rounded-xl text-xs font-bold text-left transition-all cursor-pointer flex items-center justify-between ${currentChatTimerHours === opt.hours ? "bg-[#14F195] text-black shadow" : "bg-[#242f3d] text-gray-300 hover:bg-[#324154]"}`}
+                >
+                  <span>{opt.label}</span>
+                  {currentChatTimerHours === opt.hours && <span>✔</span>}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setChatTimerModalOpen(false)} className="w-full py-2 bg-[#242f3d] text-gray-300 font-bold text-xs rounded-xl cursor-pointer hover:text-white">Kapat</button>
+          </div>
+        </div>
+      )}
+
       {/* AYARLAR VE GİZLİLİK MODALI */}
       {settingsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
@@ -1037,10 +1104,6 @@ export default function ChatPage() {
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">👤 Çevrim İçi Durumunu Gizle</span>
                   <input type="checkbox" checked={hideOnline} onChange={(e) => { setHideOnline(e.target.checked); saveUserSettings({ hideOnline: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
-                </div>
-                <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
-                  <span className="flex items-center gap-2">⏱️ 24 Saat Sonra Konuşmaları Otomatik Sil</span>
-                  <input type="checkbox" checked={autoDelete24h} onChange={(e) => { setAutoDelete24h(e.target.checked); saveUserSettings({ autoDelete24h: e.target.checked }); }} className="w-4 h-4 accent-[#14F195] cursor-pointer" />
                 </div>
                 <div className="p-2.5 bg-[#242f3d] rounded-xl flex items-center justify-between text-xs text-gray-200">
                   <span className="flex items-center gap-2">✔✔ Okundu Bilgisini (Mavi Tık) Kapat</span>
