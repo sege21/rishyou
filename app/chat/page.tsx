@@ -200,6 +200,7 @@ export default function ChatPage() {
     disableReadReceiptsRef.current = disableReadReceipts;
   }, [disableReadReceipts]);
 
+  // ASLA MEVCUT MESAJLARI SİLMEYEN VE GÜNCELLEYEN MERGE MOTORU
   const mergeMessageLists = useCallback((currentList: any[], incomingList: any[]) => {
     const map = new Map<string, any>();
     
@@ -212,7 +213,7 @@ export default function ChatPage() {
       const key = m.id ? `id_${m.id}` : `${m.sender?.toLowerCase().trim()}_${m.created_at}_${m.content}`;
       const existing = map.get(key);
       if (existing) {
-        map.set(key, { ...existing, ...m, is_read: m.is_read !== undefined ? m.is_read : existing.is_read, is_delivered: m.is_delivered !== undefined ? m.is_delivered : existing.is_delivered });
+        map.set(key, { ...existing, ...m, is_read: m.is_read ?? existing.is_read, is_delivered: m.is_delivered ?? existing.is_delivered });
       } else {
         map.set(key, m);
       }
@@ -271,7 +272,7 @@ export default function ChatPage() {
     }
   }
 
-  // BULUTTAN %100 HATASIZ DİREKT MESAJ ÇEKME (Javascript Filtrelemeli, Çökmez)
+  // TÜM CİHAZLAR VE GİZLİ SEKME İÇİN GARANTİLİ BULUT VERİ ÇEKME
   const loadDirectMessages = useCallback(async (u1: string, u2: string) => {
     if (!u1 || !u2) return;
     try {
@@ -364,17 +365,18 @@ export default function ChatPage() {
     if (remoteVideoRef.current) { remoteVideoRef.current.pause(); remoteVideoRef.current.srcObject = null; }
   }, []);
 
-  // GERÇEK ZAMANLI VERİTABANI DİNLEYİCİSİ (POSTGRES_CHANGES + REALTIME BROADCAST)
+  // TEK VE ORTAK GERÇEK ZAMANLI AĞ MERKEZİ (GLOBAL HUB)
   const initRealtimeHub = useCallback((username: string, isHideOnline: boolean) => {
     const cleanUser = username.toLowerCase().trim();
-    const channel = supabase.channel(`rishyou_main_hub_${cleanUser}`, {
+    
+    // TÜM KULLANICILARIN BAĞLANDIĞI ORTAK ODA
+    const channel = supabase.channel("rishyou_global_realtime_hub", {
       config: {
         broadcast: { self: false },
         presence: { key: cleanUser }
       }
     });
 
-    // Çevrim İçi Varlık Takibi
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState();
       const updatedMap: Record<string, { online: boolean; lastSeen?: string }> = {};
@@ -391,39 +393,7 @@ export default function ChatPage() {
       setPresenceMap(updatedMap);
     });
 
-    // Doğrudan Veritabanı Değişikliklerini Dinle (Postgres Changes)
-    channel.on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "messages" },
-      (payload) => {
-        const newMsg = payload.new;
-        if (!newMsg) return;
-        const cur = activeChatRef.current;
-        const s = (newMsg.sender || "").toLowerCase().trim();
-        const r = (newMsg.receiver || "").toLowerCase().trim();
-
-        if (s === cleanUser || r === cleanUser) {
-          if (r === cleanUser) addChatPartner(newMsg.sender);
-          if (cur && !cur.isGroup && (s === cur.name?.toLowerCase().trim() || r === cur.name?.toLowerCase().trim())) {
-            setMessages((prev) => mergeMessageLists(prev, [newMsg]));
-          }
-        }
-      }
-    );
-
-    channel.on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "messages" },
-      (payload) => {
-        const updatedMsg = payload.new;
-        if (!updatedMsg) return;
-        setMessages((prev) =>
-          prev.map((m) => (m.id === updatedMsg.id ? { ...m, ...updatedMsg } : m))
-        );
-      }
-    );
-
-    // Arama Sinyalleri
+    // ARAMA SİNYALİ
     channel.on("broadcast", { event: "signal" }, async ({ payload }) => {
       if (!payload || payload.receiver?.toLowerCase().trim() !== cleanUser) return;
 
@@ -449,7 +419,57 @@ export default function ChatPage() {
       }
     });
 
-    // Mavi Tık Görüldü Sinyali
+    // YENİ CANLI MESAJ GELDİĞİNDE
+    channel.on("broadcast", { event: "new_chat_msg" }, ({ payload }) => {
+      if (!payload) return;
+      const cur = activeChatRef.current;
+
+      if (payload.isGroup) {
+        const isMember = groupsRef.current.some((g) => g.id === payload.group_id);
+        if (isMember && cur?.isGroup && cur.id === payload.group_id) {
+          setMessages((prev) => mergeMessageLists(prev, [payload]));
+        }
+      } else {
+        if (payload.receiver?.toLowerCase().trim() === cleanUser) {
+          addChatPartner(payload.sender);
+
+          // İletildi sinyali geri yolla
+          channel.send({
+            type: "broadcast",
+            event: "delivery_receipt",
+            payload: { deliveredTo: cleanUser, sender: payload.sender?.toLowerCase().trim() }
+          });
+
+          // Sohbet açıksa görüldü (mavi tık) sinyali yolla
+          if (cur && !cur.isGroup && cur.name?.toLowerCase().trim() === payload.sender?.toLowerCase().trim()) {
+            setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_read: true, is_delivered: true }]));
+            if (!disableReadReceiptsRef.current) {
+              channel.send({
+                type: "broadcast",
+                event: "read_receipt",
+                payload: { reader: cleanUser, partner: payload.sender?.toLowerCase().trim() }
+              });
+            }
+          } else {
+            setMessages((prev) => mergeMessageLists(prev, [{ ...payload, is_delivered: true }]));
+          }
+        }
+      }
+    });
+
+    // İLETİLDİ SİNYALİ (ÇİFT GRİ TIK)
+    channel.on("broadcast", { event: "delivery_receipt" }, ({ payload }) => {
+      if (!payload || payload.sender !== cleanUser) return;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.sender?.toLowerCase().trim() === cleanUser && m.receiver?.toLowerCase().trim() === payload.deliveredTo
+            ? { ...m, is_delivered: true }
+            : m
+        )
+      );
+    });
+
+    // GÖRÜLDÜ SİNYALİ (ÇİFT MAVİ TIK)
     channel.on("broadcast", { event: "read_receipt" }, ({ payload }) => {
       if (!payload || payload.partner !== cleanUser) return;
       const reader = payload.reader;
@@ -462,7 +482,7 @@ export default function ChatPage() {
       );
     });
 
-    // Yazıyor Durumu
+    // YAZIYOR... GÖSTERGESİ
     channel.on("broadcast", { event: "typing_status" }, ({ payload }) => {
       if (!payload || payload.receiver !== cleanUser) return;
       setTypingMap((prev) => ({ ...prev, [payload.sender]: payload.isTyping }));
@@ -639,7 +659,7 @@ export default function ChatPage() {
     }
   }
 
-  // DOĞRUDAN BULUTA YAZAN VE EKRANDA KİLİTLİ TUTAN MESAJ GÖNDERME
+  // BULUTA VE EKRANA KALICI MESAJ GÖNDERME
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
@@ -667,20 +687,25 @@ export default function ChatPage() {
       addChatPartner(activeChat.name);
     }
 
+    if (signalChannelRef.current) {
+      signalChannelRef.current.send({
+        type: "broadcast",
+        event: "new_chat_msg",
+        payload: newMsg
+      });
+    }
+
     try {
       if (activeChat.isGroup) {
-        const { data, error } = await supabase.from("group_messages").insert([{
+        await supabase.from("group_messages").insert([{
           group_id: activeChat.id,
           sender: currentUser,
           content: content,
           message_type: isAudio ? "audio" : "text",
           created_at: newMsg.created_at
-        }]).select().single();
-        if (data && !error) {
-          setMessages((prev) => mergeMessageLists(prev, [data]));
-        }
+        }]);
       } else {
-        const { data, error } = await supabase.from("messages").insert([{
+        await supabase.from("messages").insert([{
           sender: currentUser,
           receiver: activeChat.name,
           content: content,
@@ -688,13 +713,10 @@ export default function ChatPage() {
           created_at: newMsg.created_at,
           is_delivered: newMsg.is_delivered,
           is_read: false
-        }]).select().single();
-        if (data && !error) {
-          setMessages((prev) => mergeMessageLists(prev, [data]));
-        }
+        }]);
       }
     } catch (e) {
-      console.error("Supabase insert hatası:", e);
+      console.error("Supabase insert log:", e);
     }
   }
 
