@@ -59,7 +59,7 @@ export default function ChatPage() {
 
   // MENÜ VE MODALLAR
   const [dogMenuOpen, setDogMenuOpen] = useState(false);
-  const [chatMenuOpen, setChatMenuOpen] = useState(false); // 3 NOKTA MENÜSÜ
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"privacy" | "lang" | "sound" | "theme" | "pin">("privacy");
   const [qrModalOpen, setQrModalOpen] = useState(false);
@@ -400,7 +400,7 @@ export default function ChatPage() {
         setMessages(Array.from(mergedMap.values()));
       }
     } catch (e) {
-      console.error("Bulut mesaj senkronizasyon hatası:", e);
+      console.error("Bulut senkronizasyon hatası:", e);
     }
   }
 
@@ -541,25 +541,32 @@ export default function ChatPage() {
     }
   }
 
+  // MOBİL & MASAÜSTÜ KESİNTİSİZ MESAJ GÖNDERİMİ
   async function sendMessage(audioBase64?: string) {
     if (!currentUser || !activeChat) return;
     const isAudio = !!audioBase64;
-    const content = isAudio ? audioBase64 : text.trim();
-    if (!content) return;
-    if (!isAudio) { setText(""); setShowEmojiPicker(false); }
+    const contentToSend = isAudio ? audioBase64 : text.trim();
+    if (!contentToSend) return;
+    
+    if (!isAudio) { 
+      setText(""); 
+      setShowEmojiPicker(false); 
+    }
 
     const newMsg = {
       sender: currentUser,
       receiver: activeChat.isGroup ? null : activeChat.name,
       group_id: activeChat.isGroup ? activeChat.id : null,
-      content: content,
+      content: contentToSend,
       message_type: isAudio ? "audio" : "text",
       created_at: new Date().toISOString(),
       isGroup: activeChat.isGroup
     };
 
+    // 1. Ekrana anında yazdır
     setMessages((prev) => [...prev, newMsg]);
 
+    // 2. Kalıcı diske yazdır
     const targetId = activeChat.isGroup ? activeChat.id : activeChat.name;
     saveMessageToStorage(currentUser, targetId, activeChat.isGroup, newMsg);
 
@@ -567,6 +574,7 @@ export default function ChatPage() {
       addChatPartner(activeChat.name);
     }
 
+    // 3. Karşı tarafa ilet
     if (signalChannelRef.current) {
       signalChannelRef.current.send({
         type: "broadcast",
@@ -575,12 +583,13 @@ export default function ChatPage() {
       });
     }
 
+    // 4. Buluta kaydet
     try {
       if (activeChat.isGroup) {
         await supabase.from("group_messages").insert([{
           group_id: activeChat.id,
           sender: currentUser,
-          content: content,
+          content: contentToSend,
           message_type: isAudio ? "audio" : "text",
           created_at: newMsg.created_at
         }]);
@@ -588,13 +597,13 @@ export default function ChatPage() {
         await supabase.from("messages").insert([{
           sender: currentUser,
           receiver: activeChat.name,
-          content: content,
+          content: contentToSend,
           message_type: isAudio ? "audio" : "text",
           created_at: newMsg.created_at
         }]);
       }
     } catch (e) {
-      console.error("Supabase insert log:", e);
+      console.error("Mesaj kayıt log:", e);
     }
   }
 
@@ -882,14 +891,14 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans select-none">
+    <div className="fixed inset-0 h-[100dvh] w-full bg-[#0e1621] text-gray-200 overflow-hidden font-sans flex">
       
       {/* SİSTEM SESLERİ VE AKTİF SES ÇALICI */}
       <audio ref={ringtoneRef} src="https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={dialtoneRef} src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" loop className="opacity-0 pointer-events-none absolute w-0 h-0" />
       <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerOff} className="opacity-0 pointer-events-none absolute w-0 h-0" />
 
-      {/* SOL MENÜ / GELEN KUTUSU (INBOX) */}
+      {/* SOL MENÜ / GELEN KUTUSU */}
       <aside className={`flex flex-col w-full md:w-80 lg:w-96 bg-[#17212b] border-r border-[#242f3d] flex-shrink-0 relative ${activeChat ? "hidden md:flex" : "flex"}`}>
         
         <div className="flex items-center justify-between p-3 border-b border-[#242f3d] bg-[#17212b] z-20 gap-1.5">
@@ -1051,11 +1060,11 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      {/* SAĞ SOHBET EKRANI */}
+      {/* SAĞ SOHBET ALANI */}
       <main className={`flex-1 flex flex-col bg-[#0e1621] relative ${!activeChat ? "hidden md:flex" : "flex"}`}>
         {activeChat ? (
           <>
-            {/* ÜST BAŞLIK & BUTONLAR & 3 NOKTA MENÜSÜ */}
+            {/* ÜST BAŞLIK & 3 NOKTA MENÜSÜ */}
             <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#242f3d] bg-[#17212b]/90 backdrop-blur-md z-20 gap-2 relative">
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <button onClick={() => selectChat(null)} className="md:hidden p-1.5 -ml-1 text-gray-400 hover:text-white rounded-lg active:bg-gray-800 cursor-pointer">
@@ -1079,8 +1088,8 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* SAĞ ÜST AKSİYONLAR: ARAMA, BAHŞİŞ VE 3 NOKTA */}
-              <div className="flex items-center gap-1.5 flex-shrink-0">
+              {/* SAĞ AKSİYONLAR */}
+              <div className="flex items-center gap-1 flex-shrink-0">
                 {!activeChat.isGroup && (
                   <>
                     <button onClick={() => startCall(false)} title="Sesli Arama" className="p-2 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-[#14F195] text-xs transition-all active:scale-90 cursor-pointer">📞</button>
@@ -1088,20 +1097,19 @@ export default function ChatPage() {
                   </>
                 )}
 
-                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer">
+                <button onClick={() => { setTransferTarget(activeChat.name); setWalletModalOpen(true); }} className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#9945FF] to-[#14F195] text-black font-black text-xs shadow-md transition-all active:scale-90 flex items-center gap-1 cursor-pointer">
                   <span>💸</span><span className="hidden sm:inline">Bahşiş</span>
                 </button>
 
-                {/* 3 NOKTA (⋮) BUTONU */}
-                <button onClick={() => setChatMenuOpen(!chatMenuOpen)} title="Seçenekler" className="p-2 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-300 text-sm font-bold transition-all active:scale-90 cursor-pointer flex items-center justify-center">
+                {/* 3 NOKTA MENÜ BUTONU */}
+                <button onClick={() => setChatMenuOpen(!chatMenuOpen)} title="Seçenekler" className="p-2 rounded-xl bg-[#242f3d] hover:bg-[#2b394a] text-gray-300 text-sm font-bold transition-all active:scale-90 cursor-pointer">
                   ⋮
                 </button>
 
-                {/* 3 NOKTA AÇILIR MENÜSÜ */}
                 {chatMenuOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setChatMenuOpen(false)} />
-                    <div className="absolute top-12 right-2 w-52 bg-[#17212b] border border-gray-700/80 rounded-2xl p-2 shadow-2xl z-50 space-y-1 backdrop-blur-xl">
+                    <div className="absolute top-12 right-2 w-52 bg-[#17212b] border border-gray-700 rounded-2xl p-2 shadow-2xl z-50 space-y-1 backdrop-blur-xl">
                       <button onClick={() => { setChatTimerModalOpen(true); setChatMenuOpen(false); }} className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#242f3d] text-xs text-amber-400 font-bold transition-colors cursor-pointer text-left">
                         <span>⏱️</span> Süreli Mesajlar
                       </button>
@@ -1123,7 +1131,7 @@ export default function ChatPage() {
               </div>
             </div>
 
-            {/* MESAJLAR AKIŞI (KOMPAKT BALON VE DOĞRU HİZALAMA) */}
+            {/* MESAJ AKIŞI (KOMPAKT BALONLAR - METİN VE SAAT YAN YANA) */}
             <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 bg-gradient-to-b from-[#0e1621] to-[#121c27] relative flex flex-col">
               <div className="flex justify-center my-1">
                 <div className="px-3 py-1.5 bg-[#1e293b]/90 border border-[#14F195]/30 rounded-2xl text-[10px] sm:text-[11px] shadow-lg flex items-center gap-2 backdrop-blur-md">
@@ -1138,15 +1146,26 @@ export default function ChatPage() {
                 const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";
                 return (
-                  <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-gradient-to-r from-[#2b5278] to-[#1e3b56] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto border border-white/5"}`}>
+                  <div key={idx} className={`flex w-full mb-1 ${isMe ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto border border-white/5"}`}>
                       {activeChat.isGroup && !isMe && (
                         <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>
                       )}
-                      {isAudio ? <audio controls src={m.content} className="max-w-[200px] h-8 my-1" /> : <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>}
-                      <div className="text-[9px] text-gray-400 text-right mt-0.5 opacity-70">
-                        {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </div>
+                      {isAudio ? (
+                        <div className="flex flex-col gap-1">
+                          <audio controls src={m.content} className="max-w-[200px] h-8 my-1" />
+                          <span className="text-[9px] text-gray-400 text-right opacity-70">
+                            {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-end justify-between gap-2.5 flex-wrap">
+                          <span className="leading-snug text-xs sm:text-sm whitespace-pre-wrap">{m.content}</span>
+                          <span className="text-[9px] text-gray-400 opacity-70 select-none pb-0.5 ml-auto flex-shrink-0">
+                            {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -1167,15 +1186,32 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
-              <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto">
-                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2.5 rounded-2xl text-lg transition-all active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
+              <form 
+                onSubmit={(e) => { 
+                  e.preventDefault(); 
+                  e.stopPropagation();
+                  sendMessage(); 
+                }} 
+                className="flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto w-full"
+              >
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2.5 rounded-2xl text-lg active:scale-95 cursor-pointer bg-[#242f3d] text-gray-300 hover:text-[#14F195] flex-shrink-0" title="Emoji & Çıkartma">
                   😊
                 </button>
-                <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Mesajınızı yazın..." className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3.5 py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" />
-                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">
+                <input 
+                  type="text" 
+                  value={text} 
+                  onChange={(e) => setText(e.target.value)} 
+                  placeholder="Mesajınızı yazın..." 
+                  className="flex-1 bg-[#242f3d] border border-gray-700/70 text-xs sm:text-sm text-white px-3.5 py-2.5 rounded-2xl focus:outline-none focus:border-[#14F195] min-w-0" 
+                />
+                <button type="button" onClick={isRecordingAudio ? stopRecordingAudio : startRecordingAudio} className={`p-2.5 rounded-2xl text-xs font-bold active:scale-95 cursor-pointer flex-shrink-0 ${isRecordingAudio ? "bg-red-500 text-white animate-pulse" : "bg-[#242f3d] text-gray-300 hover:text-white"}`} title="Sesli Mesaj">
                   {isRecordingAudio ? "⏹️" : "🎙️"}
                 </button>
-                <button type="submit" disabled={!text.trim()} className="px-4 py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 transition-all active:scale-95 cursor-pointer flex-shrink-0">
+                <button 
+                  type="submit" 
+                  disabled={!text.trim()} 
+                  className="px-4 py-2.5 bg-[#14F195] text-black font-black text-xs sm:text-sm rounded-2xl shadow-lg disabled:opacity-40 active:scale-95 cursor-pointer flex-shrink-0"
+                >
                   Gönder
                 </button>
               </form>
