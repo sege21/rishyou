@@ -1,4 +1,5 @@
-"use client";
+﻿"use client";
+import StoryBar from '@/components/StoryBar';
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
@@ -79,8 +80,6 @@ export default function ChatPage() {
   const [vaultModalOpen, setVaultModalOpen] = useState(false);
   const [createGroupModal, setCreateGroupModal] = useState(false);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
-  const [storyModalOpen, setStoryModalOpen] = useState(false);
-  const [activeStoryView, setActiveStoryView] = useState<any | null>(null);
 
   const [chatTimerModalOpen, setChatTimerModalOpen] = useState(false);
   const [chatTimers, setChatTimers] = useState<Record<string, number>>({});
@@ -97,10 +96,6 @@ export default function ChatPage() {
   const [solChange, setSolChange] = useState<string>("+1.40%");
   const [tpsCount, setTpsCount] = useState<number>(2374);
 
-  const [stories, setStories] = useState<any[]>([
-    { id: "1", user: "Rishyou_Official", text: "🐶 $RISH Web3 Messenger Devrede!", color: "from-purple-600 to-emerald-500" }
-  ]);
-  const [newStoryText, setNewStoryText] = useState("");
   const [vaultNotes, setVaultNotes] = useState<string[]>([]);
   const [newVaultNote, setNewVaultNote] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
@@ -852,13 +847,6 @@ export default function ChatPage() {
     router.push("/");
   }
 
-  function addStory() {
-    if (!newStoryText.trim() || !currentUser) return;
-    setStories([{ id: Date.now().toString(), user: currentUser, text: newStoryText.trim(), color: "from-pink-500 to-amber-500" }, ...stories]);
-    setNewStoryText("");
-    setStoryModalOpen(false);
-  }
-
   const visibleUsers = searchQuery.trim()
     ? users.filter((u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
     : users.filter((u) => {
@@ -951,17 +939,8 @@ export default function ChatPage() {
           )}
         </div>
 
-        <div className="px-3 py-2 border-b border-[#242f3d] flex items-center gap-3 overflow-x-auto">
-          <div onClick={() => setStoryModalOpen(true)} className="flex flex-col items-center flex-shrink-0 cursor-pointer group">
-            <div className="w-11 h-11 rounded-full border-2 border-dashed border-[#14F195] p-0.5 flex items-center justify-center bg-[#242f3d] group-hover:scale-105 transition-transform"><span className="text-base text-[#14F195] font-black">+</span></div>
-            <span className="text-[10px] text-gray-400 mt-1">Hikayen</span>
-          </div>
-          {stories.map((s) => (
-            <div key={s.id} onClick={() => setActiveStoryView(s)} className="flex flex-col items-center flex-shrink-0 cursor-pointer group">
-              <div className="w-11 h-11 rounded-full border-2 border-[#14F195] p-0.5 flex items-center justify-center bg-gradient-to-tr from-[#9945FF] to-[#14F195] group-hover:scale-105 transition-transform"><span className="text-xs font-black text-black">{s.user.slice(0, 2).toUpperCase()}</span></div>
-              <span className="text-[10px] text-gray-300 mt-1 truncate max-w-[50px]">@{s.user}</span>
-            </div>
-          ))}
+        <div className="border-b border-[#242f3d] bg-[#17212b]">
+          <StoryBar />
         </div>
 
         <div className="p-3 pb-0">
@@ -1304,26 +1283,6 @@ export default function ChatPage() {
             <div className="w-44 h-44 bg-white p-2 mx-auto rounded-2xl flex items-center justify-center shadow-inner"><img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${walletAddress || "solana"}`} alt="QR" className="w-full h-full" /></div>
             <p className="text-[10px] text-gray-400 font-mono break-all select-all">{walletAddress}</p>
             <button onClick={() => setQrModalOpen(false)} className="w-full py-2 bg-[#14F195] text-black font-bold text-xs rounded-xl cursor-pointer">Kapat</button>
-          </div>
-        </div>
-      )}
-
-      {storyModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
-          <div className="w-full max-w-sm bg-[#17212b] border border-[#14F195]/40 rounded-3xl p-5 shadow-2xl space-y-3">
-            <h3 className="text-xs font-black text-white">Hikaye Ekle</h3>
-            <textarea value={newStoryText} onChange={(e) => setNewStoryText(e.target.value)} placeholder="Hikayenizde ne paylaşmak istersiniz?" className="w-full h-24 bg-[#242f3d] border border-gray-700 text-xs text-white p-2.5 rounded-xl focus:outline-none focus:border-[#14F195]" />
-            <button onClick={addStory} disabled={!newStoryText.trim()} className="w-full py-2.5 bg-[#14F195] text-black font-black text-xs rounded-xl cursor-pointer">Paylaş</button>
-          </div>
-        </div>
-      )}
-
-      {activeStoryView && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl" onClick={() => setActiveStoryView(null)}>
-          <div className={`w-full max-w-xs h-96 bg-gradient-to-tr ${activeStoryView.color} rounded-3xl p-6 flex flex-col justify-between shadow-2xl relative border-2 border-white/20`} onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-white/20 pb-3"><span className="text-xs font-black text-white">@{activeStoryView.user}</span><button onClick={() => setActiveStoryView(null)} className="text-white text-xs font-bold cursor-pointer">✕</button></div>
-            <p className="text-base font-bold text-white text-center drop-shadow-md">{activeStoryView.text}</p>
-            <div className="text-[10px] text-white/70 text-center">Rishyou Story</div>
           </div>
         </div>
       )}
