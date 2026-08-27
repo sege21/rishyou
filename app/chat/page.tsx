@@ -858,27 +858,19 @@ export default function ChatPage() {
         return tabFilter === "locked" ? isLocked : isPartner && !isLocked;
       });
 
-  const filteredGroups = displayGroupsList.filter((g) => {
-    const matches = g.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const isLocked = lockedChats.includes(`grp_${g.id}`);
-    return tabFilter === "locked" ? matches && isLocked : matches && !isLocked;
-  });
-
-  const sortedUsers = [...visibleUsers].sort((a, b) => {
-    const aPin = pinnedChats.includes(a.username);
-    const bPin = pinnedChats.includes(b.username);
-    return aPin === bPin ? 0 : aPin ? -1 : 1;
-  });
-
-  const allAvailableGroups = [GLOBAL_ROOM, ...groups.filter((g: any) => g.id !== "global" && g.name !== "Rishyou Global")];
-  const filteredGroups = allAvailableGroups.filter((g: any) => {
-    if (searchQuery.trim()) {
+  const allGroupsWithGlobal = [
+    GLOBAL_ROOM,
+    ...groups.filter((g: any) => g && g.id !== "global" && g.name !== "Rishyou Global")
+  ];
+  const filteredGroups = allGroupsWithGlobal.filter((g: any) => {
+    if (searchQuery && searchQuery.trim()) {
       return g.name.toLowerCase().includes(searchQuery.toLowerCase());
     }
     return true;
   });
-  const effectiveGroups = [GLOBAL_ROOM, ...filteredGroups.filter((g: any) => g.id !== 'global' && g.name !== 'Rishyou Global')];
-  const sortedGroups = [...effectiveGroups].sort((a, b) => {
+  const sortedGroups = [...filteredGroups].sort((a: any, b: any) => {
+    if (a.id === "global") return -1;
+    if (b.id === "global") return 1;
     const aPin = pinnedChats.includes(a.id);
     const bPin = pinnedChats.includes(b.id);
     return aPin === bPin ? 0 : aPin ? -1 : 1;
