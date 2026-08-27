@@ -28,19 +28,15 @@ export default function Top10Ticker() {
   const loopedList = [...cryptoList, ...cryptoList];
 
   return (
-    <div
-      style={{ maxWidth: "100%", width: "100%", overflow: "hidden" }}
-      className="w-full max-w-full min-w-0 bg-[#111923]/95 backdrop-blur-md border-b border-[#242f3d] py-1 flex items-center shrink-0 z-10 select-none relative box-border"
-    >
+    <div className="w-full max-w-full overflow-hidden bg-[#111923] border-b border-[#242f3d] py-1.5 flex items-center shrink-0 z-10 select-none">
       <style>{`
         @keyframes tickerMarquee {
-          0% { transform: translate3d(0, 0, 0); }
-          100% { transform: translate3d(-50%, 0, 0); }
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
         }
         .animate-ticker-marquee {
           display: flex;
           width: max-content;
-          will-change: transform;
           animation: tickerMarquee 35s linear infinite;
         }
         .animate-ticker-marquee:hover {
@@ -49,22 +45,22 @@ export default function Top10Ticker() {
       `}</style>
 
       {/* Sabit Sol Rozet */}
-      <div className="flex items-center gap-1.5 pl-2.5 pr-2 bg-[#111923] shrink-0 z-20 border-r border-gray-800 shadow-md">
+      <div className="flex items-center gap-1.5 px-2.5 bg-[#111923] shrink-0 z-20 border-r border-gray-800 shadow-md">
         <span className="w-2 h-2 rounded-full bg-[#14F195] animate-ping" />
         <span className="text-[10px] font-black text-[#14F195] uppercase tracking-wider whitespace-nowrap">
           🌍 DÜNYA TOP 10
         </span>
       </div>
 
-      {/* Kayan Alan (Mobil Ekranı Kesinlikle İtemez) */}
-      <div className="overflow-hidden flex-1 min-w-0 w-0 relative">
+      {/* Kayan Alan */}
+      <div className="overflow-hidden flex-1 min-w-0">
         <div className="animate-ticker-marquee gap-3 flex items-center">
           {loopedList.map((coin, index) => {
             const isUp = (coin.price_change_percentage_24h ?? 0) >= 0;
             return (
               <div
                 key={`${coin.id}-${index}`}
-                className="flex items-center gap-1.5 bg-[#1e293b]/70 border border-gray-700/40 px-2.5 py-0.5 rounded-lg text-xs shrink-0 hover:border-[#14F195]/50 transition-colors"
+                className="flex items-center gap-1.5 bg-[#1e293b]/80 border border-gray-700/50 px-2.5 py-0.5 rounded-lg text-xs shrink-0"
               >
                 {coin.image && <img src={coin.image} alt={coin.name} className="w-3.5 h-3.5 rounded-full" />}
                 <span className="font-bold text-white uppercase text-[11px]">{coin.symbol}</span>
