@@ -53,7 +53,25 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
 
 const GLOBAL_ROOM = { id: 'global', name: 'Rishyou Global', isGroup: true, members: [] };
 
+// Coklu Dil Sozlugu
+const LANG_DICT: Record<string, Record<string, string>> = {
+  TR: { all: "Tümü", direct: "Kişiler", groups: "Gruplar", locked: "Kilitli", tip: "Bahşiş", leaders: "Liderler", search: "Sohbet veya kişi ara...", globalRoom: "Rishyou Global", founder: "KURUCU", writeMsg: "Mesaj yazın...", online: "Çevrimiçi", offline: "Çevrimdışı" },
+  EN: { all: "All", direct: "Direct", groups: "Groups", locked: "Locked", tip: "Tip", leaders: "Leaders", search: "Search chat or user...", globalRoom: "Rishyou Global", founder: "FOUNDER", writeMsg: "Type a message...", online: "Online", offline: "Offline" },
+  RU: { all: "Все", direct: "Личные", groups: "Группы", locked: "Замок", tip: "Чаевые", leaders: "Лидеры", search: "Поиск чата...", globalRoom: "Rishyou Global", founder: "ОСНОВАТЕЛЬ", writeMsg: "Напишите сообщение...", online: "В сети", offline: "Не в сети" },
+  AR: { all: "الكل", direct: "الرسائل", groups: "المجموعات", locked: "المقفل", tip: "إكرامية", leaders: "المتصدرين", search: "بحث عن محادثة...", globalRoom: "Rishyou Global", founder: "المؤسس", writeMsg: "اكتب رسالة...", online: "متصل", offline: "غير متصل" },
+  DE: { all: "Alle", direct: "Direkt", groups: "Gruppen", locked: "Gesperrt", tip: "Trinkgeld", leaders: "Rangliste", search: "Chat suchen...", globalRoom: "Rishyou Global", founder: "GRÜNDER", writeMsg: "Nachricht schreiben...", online: "Online", offline: "Offline" }
+};
+
+// Kurucu Rozeti
+const FounderBadge = () => (
+  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-gradient-to-r from-amber-500/30 to-yellow-300/30 border border-amber-400/60 text-amber-300 text-[9px] font-black tracking-wider shadow-[0_0_8px_rgba(251,191,36,0.35)] shrink-0 select-none">
+    👑 KURUCU
+  </span>
+);
+
 export default function ChatPage() {
+  const [selectedLang, setSelectedLang] = useState<string>('TR');
+  const t = LANG_DICT[selectedLang] || LANG_DICT['TR'];
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [tabFilter, setTabFilter] = useState<"all" | "direct" | "groups" | "locked">("all");
@@ -1087,7 +1105,14 @@ export default function ChatPage() {
                 return (
                   <div key={idx} className={`flex w-full ${isMe ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[80%] sm:max-w-[65%] rounded-2xl px-3 py-1.5 text-xs shadow-md break-words ${isMe ? "bg-[#2b5278] text-white rounded-br-xs ml-auto" : "bg-[#182533] text-gray-200 rounded-bl-xs mr-auto"}`}>
-                      {activeChat.isGroup && !isMe && <p className="text-[10px] font-bold text-[#14F195] mb-0.5">@{m.sender}</p>}
+                      {activeChat.isGroup && !isMe && (
+  <div className="flex items-center gap-1.5 mb-1">
+    <span className={`text-[11px] font-black ${m.sender.toLowerCase() === "rishyou" ? "text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]" : "text-[#14F195]"}`}>
+      @{m.sender} {m.sender.toLowerCase() === "rishyou" && "(Rishyou)"}
+    </span>
+    {m.sender.toLowerCase() === "rishyou" && <FounderBadge />}
+  </div>
+)}
                       {isAudio ? <div className="py-0.5"><audio controls src={m.content} playsInline className="w-[190px] sm:w-[220px] h-8 rounded-lg accent-[#14F195]" /></div> : <p className="leading-relaxed whitespace-pre-wrap text-[12.5px] sm:text-xs">{m.content}</p>}
                       <div className="flex items-center justify-end gap-1 text-[8.5px] sm:text-[9px] text-gray-300/70 mt-0.5">
                         <span>{new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
