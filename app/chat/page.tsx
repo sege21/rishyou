@@ -1,5 +1,6 @@
 ﻿"use client";
 import StoryBar from '@/components/StoryBar';
+import Top10Ticker from '@/components/Top10Ticker';
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
@@ -58,7 +59,7 @@ export default function ChatPage() {
 
   const [users, setUsers] = useState<any[]>([]);
   const [activeChatPartners, setActiveChatPartners] = useState<string[]>([]);
-  const [groups, setGroups] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([{ id: "global", name: "Rishyou Global", isGroup: true, members: [] }]);
   const [messages, setMessages] = useState<any[]>([]);
   const [text, setText] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -389,7 +390,7 @@ export default function ChatPage() {
       const { data } = await supabase.from("groups").select("*");
       if (data) {
         const myGroups = data.filter((g: any) => g.created_by === username || (Array.isArray(g.members) && g.members.includes(username)));
-        setGroups(myGroups);
+        const defaultGlobal = { id: "global", name: "Rishyou Global", isGroup: true, members: [] }; setGroups([defaultGlobal, ...myGroups.filter((g: any) => g.id !== "global")]);
       }
     } catch {}
   }
@@ -1066,7 +1067,8 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {displayMessages.map((m, idx) => {
+              {(activeChat?.isGroup || activeChat?.id === 'global' || activeChat?.name === 'Rishyou Global') && <Top10Ticker />}
+          {displayMessages.map((m, idx) => {
                 const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";
                 const isRead = m.is_read || m.status === "read";
