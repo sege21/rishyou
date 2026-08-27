@@ -1,4 +1,5 @@
-﻿"use client";
+﻿import LanguageSelector from '@/components/LanguageSelector';
+"use client";
 import StoryBar from '@/components/StoryBar';
 import Top10Ticker from '@/components/Top10Ticker';
 import { useState, useEffect, useRef } from "react";
