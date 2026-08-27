@@ -1067,7 +1067,7 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {(activeChat?.isGroup || activeChat?.id === 'global' || activeChat?.name === 'Rishyou Global') && <Top10Ticker />}
+              {(activeChat && (activeChat.id === 'global' || activeChat.name === 'Rishyou Global')) && <Top10Ticker />}
           {displayMessages.map((m, idx) => {
                 const isMe = m.sender === currentUser;
                 const isAudio = m.message_type === "audio";

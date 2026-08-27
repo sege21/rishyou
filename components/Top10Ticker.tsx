@@ -28,15 +28,19 @@ export default function Top10Ticker() {
   const loopedList = [...cryptoList, ...cryptoList];
 
   return (
-    <div className="w-full max-w-full min-w-0 overflow-hidden bg-[#111923]/95 backdrop-blur-md border-b border-[#242f3d] py-1.5 flex items-center shrink-0 z-10 select-none relative">
+    <div
+      style={{ maxWidth: "100%", width: "100%", overflow: "hidden" }}
+      className="w-full max-w-full min-w-0 bg-[#111923]/95 backdrop-blur-md border-b border-[#242f3d] py-1 flex items-center shrink-0 z-10 select-none relative box-border"
+    >
       <style>{`
         @keyframes tickerMarquee {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
+          0% { transform: translate3d(0, 0, 0); }
+          100% { transform: translate3d(-50%, 0, 0); }
         }
         .animate-ticker-marquee {
           display: flex;
           width: max-content;
+          will-change: transform;
           animation: tickerMarquee 35s linear infinite;
         }
         .animate-ticker-marquee:hover {
@@ -44,16 +48,16 @@ export default function Top10Ticker() {
         }
       `}</style>
 
-      {/* Sabit Sol Başlık Rozeti */}
-      <div className="flex items-center gap-1.5 pl-3 pr-2.5 bg-[#111923] shrink-0 z-20 border-r border-gray-800 shadow-md">
+      {/* Sabit Sol Rozet */}
+      <div className="flex items-center gap-1.5 pl-2.5 pr-2 bg-[#111923] shrink-0 z-20 border-r border-gray-800 shadow-md">
         <span className="w-2 h-2 rounded-full bg-[#14F195] animate-ping" />
-        <span className="text-[10px] font-black text-[#14F195] uppercase tracking-wider">
+        <span className="text-[10px] font-black text-[#14F195] uppercase tracking-wider whitespace-nowrap">
           🌍 DÜNYA TOP 10
         </span>
       </div>
 
-      {/* Ekran Dışına Taşmayı Engelleyen Kilitli Akış Alanı */}
-      <div className="overflow-hidden flex-1 min-w-0 w-full relative">
+      {/* Kayan Alan (Mobil Ekranı Kesinlikle İtemez) */}
+      <div className="overflow-hidden flex-1 min-w-0 w-0 relative">
         <div className="animate-ticker-marquee gap-3 flex items-center">
           {loopedList.map((coin, index) => {
             const isUp = (coin.price_change_percentage_24h ?? 0) >= 0;
