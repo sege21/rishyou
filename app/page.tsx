@@ -252,7 +252,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-[100dvh] w-full items-center justify-center bg-[#0e1621] p-3 text-gray-200">
+    <main className="flex h-[100dvh] overflow-hidden w-full w-full items-center justify-center bg-[#0e1621] p-3 text-gray-200">
       <div className="w-full max-w-[380px] sm:max-w-md bg-[#17212b]/95 border-2 border-[#14F195]/40 rounded-3xl p-6 sm:p-7 shadow-[0_0_50px_rgba(20,241,149,0.2)] flex flex-col items-center backdrop-blur-xl">
         
         {/* Maskot Logo */}
