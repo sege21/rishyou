@@ -868,6 +868,16 @@ export default function ChatPage() {
     }
     return true;
   });
+  const effectiveGroups = [
+    GLOBAL_ROOM,
+    ...groups.filter((g: any) => g && g.id !== "global" && g.name !== "Rishyou Global")
+  ];
+  const filteredGroups = effectiveGroups.filter((g: any) => {
+    if (searchQuery && searchQuery.trim()) {
+      return g.name.toLowerCase().includes(searchQuery.toLowerCase());
+    }
+    return true;
+  });
   const sortedGroups = [...filteredGroups].sort((a: any, b: any) => {
     if (a.id === "global") return -1;
     if (b.id === "global") return 1;
