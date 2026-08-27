@@ -870,7 +870,14 @@ export default function ChatPage() {
     return aPin === bPin ? 0 : aPin ? -1 : 1;
   });
 
-  const displayGroupsList = groups.some((g: any) => g.id === "global" || g.name === "Rishyou Global") ? groups : [GLOBAL_ROOM, ...groups];`n  const sortedGroups = [...filteredGroups].sort((a, b) => {
+  const allAvailableGroups = [GLOBAL_ROOM, ...groups.filter((g: any) => g.id !== "global" && g.name !== "Rishyou Global")];
+  const filteredGroups = allAvailableGroups.filter((g: any) => {
+    if (searchQuery.trim()) {
+      return g.name.toLowerCase().includes(searchQuery.toLowerCase());
+    }
+    return true;
+  });
+  const sortedGroups = [...filteredGroups].sort((a, b) => {
     const aPin = pinnedChats.includes(a.id);
     const bPin = pinnedChats.includes(b.id);
     return aPin === bPin ? 0 : aPin ? -1 : 1;
