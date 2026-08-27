@@ -51,6 +51,15 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
   );
 }
 
+// RISHYOU GLOBAL LOGO
+const GlobalWorldIcon = ({ size = "w-10 h-10", iconSize = "w-6 h-6" }: { size?: string; iconSize?: string }) => (
+  <div className={`${size} rounded-2xl bg-gradient-to-tr from-[#0a2318] via-[#123826] to-[#14F195]/20 border border-[#14F195]/40 flex items-center justify-center text-[#14F195] shadow-[0_0_15px_rgba(20,241,149,0.3)] shrink-0`}>
+    <svg className={`${iconSize} text-[#14F195] drop-shadow-[0_0_6px_rgba(20,241,149,0.6)]`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  </div>
+);
+
 export default function ChatPage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
@@ -1034,7 +1043,7 @@ export default function ChatPage() {
                   {activeChat.isGroup ? "👥" : activeChat.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div className="min-w-0">
-                  <h2 className="text-xs font-bold text-white truncate leading-tight">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
+                  <h2 className="text-xs font-bold text-white truncate leading-tight">{activeChat.isGroup ? activeChat.name : `@${(activeChat.id === "global" || activeChat.name === "Rishyou Global") && <GlobalWorldIcon size="w-8 h-8" iconSize="w-4 h-4" />}{activeChat.name}`}</h2>
                   <div className="flex items-center gap-1 truncate">
                     <span className="text-[9px] sm:text-[10px] text-[#14F195] truncate">{activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}</span>
                     {currentChatTimerHours > 0 && <span className="text-[8px] sm:text-[9px] bg-amber-500/25 text-amber-400 px-1 py-0.1 rounded font-bold flex-shrink-0">⏱️ {currentChatTimerHours === 24 ? "24s" : currentChatTimerHours === 1 ? "1s" : "7g"}</span>}
@@ -1175,7 +1184,7 @@ export default function ChatPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-[#17212b] border border-amber-500/40 rounded-3xl p-5 shadow-2xl space-y-3">
             <div className="flex items-center justify-between border-b border-gray-700 pb-2">
-              <h3 className="text-xs font-black text-amber-400 flex items-center gap-1.5"><span>⏱️</span> Süreli Mesajlar ({activeChat.isGroup ? activeChat.name : `@${activeChat.name}`})</h3>
+              <h3 className="text-xs font-black text-amber-400 flex items-center gap-1.5"><span>⏱️</span> Süreli Mesajlar ({activeChat.isGroup ? activeChat.name : `@${(activeChat.id === "global" || activeChat.name === "Rishyou Global") && <GlobalWorldIcon size="w-8 h-8" iconSize="w-4 h-4" />}{activeChat.name}`})</h3>
               <button onClick={() => setChatTimerModalOpen(false)} className="text-gray-400 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
             <p className="text-[11px] text-gray-400">Bu sohbet için seçilen süreden eski mesajlar otomatik olarak temizlenir. Diğer kişilerle olan konuşmalarınız etkilenmez.</p>
