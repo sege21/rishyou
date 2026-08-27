@@ -965,6 +965,7 @@ export default function ChatPage() {
                 <button onClick={() => { setQrModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>🎴</span> QR ile Ödeme Al</button>
                 <button onClick={() => { setStarredModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>⭐</span> Yıldızlı Mesajlar</button>
                 <button onClick={() => { setVaultModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>🔒</span> Kaydedilen Notlar (Kasa)</button>
+                <div className="flex items-center justify-between bg-[#1e293b] p-3 rounded-xl mb-4 border border-gray-700"><span className="text-sm font-bold text-gray-200">Dil / Language 🌍</span><LanguageSelector /></div>
                 <button onClick={handleLogout} className="w-full py-2.5 bg-gradient-to-r from-red-600 to-amber-600 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 cursor-pointer"><span>🚪</span> Hesaptan Çıkış Yap</button>
               </div>
             </>
