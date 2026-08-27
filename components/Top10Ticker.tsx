@@ -28,7 +28,7 @@ export default function Top10Ticker() {
   const loopedList = [...cryptoList, ...cryptoList];
 
   return (
-    <div className="w-full bg-[#111923]/95 backdrop-blur-md border-b border-[#242f3d] py-1.5 overflow-hidden relative flex items-center shrink-0 z-10 select-none">
+    <div className="w-full max-w-full min-w-0 overflow-hidden bg-[#111923]/95 backdrop-blur-md border-b border-[#242f3d] py-1.5 flex items-center shrink-0 z-10 select-none relative">
       <style>{`
         @keyframes tickerMarquee {
           0% { transform: translateX(0); }
@@ -44,6 +44,7 @@ export default function Top10Ticker() {
         }
       `}</style>
 
+      {/* Sabit Sol Başlık Rozeti */}
       <div className="flex items-center gap-1.5 pl-3 pr-2.5 bg-[#111923] shrink-0 z-20 border-r border-gray-800 shadow-md">
         <span className="w-2 h-2 rounded-full bg-[#14F195] animate-ping" />
         <span className="text-[10px] font-black text-[#14F195] uppercase tracking-wider">
@@ -51,7 +52,8 @@ export default function Top10Ticker() {
         </span>
       </div>
 
-      <div className="overflow-hidden flex-1 relative">
+      {/* Ekran Dışına Taşmayı Engelleyen Kilitli Akış Alanı */}
+      <div className="overflow-hidden flex-1 min-w-0 w-full relative">
         <div className="animate-ticker-marquee gap-3 flex items-center">
           {loopedList.map((coin, index) => {
             const isUp = (coin.price_change_percentage_24h ?? 0) >= 0;
