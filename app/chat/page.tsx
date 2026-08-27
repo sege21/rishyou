@@ -979,7 +979,7 @@ export default function ChatPage() {
 
         {/* LİSTELER */}
         <div className="flex-1 overflow-y-auto px-2 space-y-1 pb-4">
-          {(tabFilter === "all" || tabFilter === "groups" || tabFilter === "locked") && sortedGroups.map((g) => {
+          {(tabFilter === "all" || tabFilter === "groups" || tabFilter === "locked") && [GLOBAL_ROOM, ...sortedGroups.filter((x: any) => x && x.id !== "global" && x.name !== "Rishyou Global")].map((g: any) => {
             const isSelected = activeChat?.isGroup && activeChat.id === g.id;
             const isPinned = pinnedChats.includes(g.id);
             const isLocked = lockedChats.includes(`grp_${g.id}`);
