@@ -51,6 +51,8 @@ function RishyouDogIcon({ size = 32 }: { size?: number }) {
   );
 }
 
+const GLOBAL_ROOM = { id: 'global', name: 'Rishyou Global', isGroup: true, members: [] };
+
 export default function ChatPage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
@@ -856,7 +858,7 @@ export default function ChatPage() {
         return tabFilter === "locked" ? isLocked : isPartner && !isLocked;
       });
 
-  const filteredGroups = groups.filter((g) => {
+  const filteredGroups = displayGroupsList.filter((g) => {
     const matches = g.name.toLowerCase().includes(searchQuery.toLowerCase());
     const isLocked = lockedChats.includes(`grp_${g.id}`);
     return tabFilter === "locked" ? matches && isLocked : matches && !isLocked;
@@ -868,7 +870,7 @@ export default function ChatPage() {
     return aPin === bPin ? 0 : aPin ? -1 : 1;
   });
 
-  const sortedGroups = [...filteredGroups].sort((a, b) => {
+  const displayGroupsList = groups.some((g: any) => g.id === "global" || g.name === "Rishyou Global") ? groups : [GLOBAL_ROOM, ...groups];`n  const sortedGroups = [...filteredGroups].sort((a, b) => {
     const aPin = pinnedChats.includes(a.id);
     const bPin = pinnedChats.includes(b.id);
     return aPin === bPin ? 0 : aPin ? -1 : 1;
