@@ -877,7 +877,8 @@ export default function ChatPage() {
     }
     return true;
   });
-  const sortedGroups = [...filteredGroups].sort((a, b) => {
+  const effectiveGroups = [GLOBAL_ROOM, ...filteredGroups.filter((g: any) => g.id !== 'global' && g.name !== 'Rishyou Global')];
+  const sortedGroups = [...effectiveGroups].sort((a, b) => {
     const aPin = pinnedChats.includes(a.id);
     const bPin = pinnedChats.includes(b.id);
     return aPin === bPin ? 0 : aPin ? -1 : 1;
