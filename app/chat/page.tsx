@@ -966,7 +966,8 @@ export default function ChatPage() {
                 <button onClick={() => { setStarredModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>⭐</span> Yıldızlı Mesajlar</button>
                 <button onClick={() => { setVaultModalOpen(true); setDogMenuOpen(false); }} className="w-full flex items-center gap-2 p-2 rounded-xl bg-[#242f3d]/70 hover:bg-[#242f3d] text-xs text-white transition-colors cursor-pointer"><span>🔒</span> Kaydedilen Notlar (Kasa)</button>
                 <div className="flex items-center justify-between bg-[#1e293b] p-3 rounded-xl mb-4 border border-gray-700"><span className="text-sm font-bold text-gray-200">Dil / Language 🌍</span><LanguageSelector /></div>
-                <button onClick={handleLogout} className="w-full py-2.5 bg-gradient-to-r from-red-600 to-amber-600 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 cursor-pointer"><span>🚪</span> Hesaptan Çıkış Yap</button>
+                <div className="flex items-center justify-between p-3 bg-[#242f3d] rounded-xl mb-3 border border-gray-700"><span className="text-sm font-bold text-gray-200">🌍 Dil Seçimi</span><LanguageSelector /></div>
+              <button onClick={handleLogout} className="w-full py-2.5 bg-gradient-to-r from-red-600 to-amber-600 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 cursor-pointer"><span>🚪</span> Hesaptan Çıkış Yap</button>
               </div>
             </>
           )}
@@ -1066,7 +1067,7 @@ export default function ChatPage() {
                   {activeChat.isGroup ? (activeChat.id === "global" || activeChat.name === "Rishyou Global" ? "🌍" : "👥") : activeChat.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div className="min-w-0">
-                  <h2 className="text-xs font-bold text-white truncate leading-tight">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>
+                  <div className="flex flex-col cursor-pointer" onClick={() => activeChat?.isGroup && setGroupInfoOpen(true)}><h2 className="text-xs font-bold text-white truncate leading-tight hover:text-[#14F195] transition-colors">{activeChat.isGroup ? activeChat.name : `@${activeChat.name}`}</h2>{activeChat?.isGroup && <span className="text-[9px] text-gray-400">Üyeleri Gör 👁️</span>}</div>
                   <div className="flex items-center gap-1 truncate">
                     <span className="text-[9px] sm:text-[10px] text-[#14F195] truncate">{activeChat.isGroup ? "Gizli Grup" : getUserOnlineStatus(activeChat.name).text}</span>
                     {currentChatTimerHours > 0 && <span className="text-[8px] sm:text-[9px] bg-amber-500/25 text-amber-400 px-1 py-0.1 rounded font-bold flex-shrink-0">⏱️ {currentChatTimerHours === 24 ? "24s" : currentChatTimerHours === 1 ? "1s" : "7g"}</span>}
@@ -1237,7 +1238,36 @@ export default function ChatPage() {
       )}
 
       {/* AYARLAR VE GİZLİLİK MODALI */}
-      {settingsModalOpen && (
+              {/* GRUP ÜYELERİ MODALI */}
+        {groupInfoOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="bg-[#17212b] border border-gray-700 w-full max-w-sm rounded-2xl shadow-2xl p-4 relative">
+              <button onClick={() => setGroupInfoOpen(false)} className="absolute top-3 right-3 text-gray-400 hover:text-white text-lg">✕</button>
+              <h2 className="text-base font-black text-white mb-4 flex items-center gap-2"><span>👥</span> {activeChat?.name} Üyeleri</h2>
+              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                {(activeChat?.id === 'global' || activeChat?.name === 'Rishyou Global') ? (
+                   <div className="text-sm text-gray-300 p-3 bg-[#1e293b] rounded-xl border border-gray-800">🌍 Bu genel bir odadır. Sisteme kayıtlı tüm kullanıcılar buradadır.</div>
+                ) : (
+                   (activeChat?.members && activeChat.members.length > 0) ? activeChat.members.map((mem: any, i: number) => {
+                      const uname = typeof mem === 'string' ? mem : (mem.username || 'Gizli');
+                      const isFounder = uname.toLowerCase() === 'rishyou';
+                      return (
+                      <div key={i} className="flex items-center gap-3 p-2 bg-[#1e293b] rounded-xl border border-gray-800">
+                         <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#9945FF] to-[#14F195] flex items-center justify-center font-bold text-black text-xs">{uname.slice(0,2).toUpperCase()}</div>
+                         <div className={	ext-sm font-bold }>@{uname}</div>
+                         {isFounder && <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400 text-amber-300 text-[9px] font-black ml-auto shadow-md">👑 KURUCU</span>}
+                      </div>
+                      )
+                   }) : (
+                      <div className="text-sm text-gray-400 p-2 text-center">Bu grupta henüz başka üye yok.</div>
+                   )
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {settingsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-md bg-[#17212b] border border-gray-700 rounded-3xl p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-gray-700 pb-2.5">
